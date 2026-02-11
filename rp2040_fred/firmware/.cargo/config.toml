@@ -1,8 +1,11 @@
 [build]
 target = "thumbv6m-none-eabi"
 
+[env]
+DEFMT_LOG = "info"
+
 [target.thumbv6m-none-eabi]
-runner = "probe-rs run --chip RP2040"
+runner = "probe-rs run --chip RP2040 --probe 2e8a:000c"
 rustflags = [
   "-C", "link-arg=--nmagic",
 ]
