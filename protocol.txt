@@ -1,0 +1,220 @@
+TCL202 <-> Lathe Controller Protocol (FRED Bus)
+================================================
+
+Scope
+- This document describes the communication path visible in `tcl202.asm`.
+- Focus is the FRED I/O page (`$FC00-$FCFF`), especially:
+  - `FRED_80 = $FC80` (write command)
+  - `FRED_F0 = $FCF0` (status/busy)
+  - `FRED_F1 = $FCF1` (read response byte)
+
+Evidence Level
+- `Confirmed`: directly visible in disassembly.
+- `Inferred`: likely from control flow and data layout, but not fully proven.
+
+
+1) Driver Lifecycle
+-------------------
+
+Confirmed:
+- `PLONKON` (`$92B6`) enables the polling/event engine:
+  - Saves previous `EVENTV` vector.
+  - Installs `event_handler` (`$9322`) via `EVENTV`.
+  - Initializes polling state (`L0080`, `L0082`, counters at `L0CF*`).
+- `PLONKOFF` (`$9200`) restores previous event vector.
+- `PLONKW` (`$9218`) also enables event polling (warm/alternate entry path).
+
+
+2) FRED Transaction Primitive
+-----------------------------
+
+Confirmed (`event_main` at `$94F4`):
+1. Wait for ready:
+   - `fredf0_1_poll` spins on `BIT FRED_F0` until clear.
+2. Write command:
+   - `LDA descriptor_cmd`
+   - `STA FRED_80`
+3. Wait again (twice in this implementation).
+4. Read one response byte:
+   - `LDA FRED_F1`
+5. Dispatch to callback routine (indirect JSR target from descriptor).
+6. Callback returns next stream index in `Y`; engine stores it to `L0080`.
+
+Pseudo:
+```text
+poll_ready();
+FRED_80 = cmd;
+poll_ready();
+poll_ready();
+A = FRED_F1;
+JSR callback(A, Y);
+L0080 = Y;
+```
+
+
+3) Descriptor Stream at `fred80_table` (`$9538`)
+-------------------------------------------------
+
+Confirmed:
+- Engine starts with `Y = L0080` and reads a command/control stream from `$9538`.
+- One entry logically contains:
+  - `cmd` (written to `FRED_80`)
+  - destination pointer (`L0088/L0089`) for formatting/output
+  - callback pointer (`L0082/L0083`)
+  - next selector byte
+
+Inferred (from raw bytes and control flow):
+- Entries overlap by one byte; the `next` byte becomes the next cycle's command byte.
+- Stream bytes at `$9538` decode as:
+  - `cmd=03 dst=495F cb=95D4 next=02`
+  - `cmd=02 dst=496F cb=956B next=01`
+  - `cmd=01 dst=498F cb=956B next=00`
+  - `cmd=00 dst=49AF cb=956B next=07`
+  - `cmd=07 dst=4A0F cb=95D4 next=06`
+  - `cmd=06 dst=4A1F cb=956B next=05`
+  - `cmd=05 dst=4A3F cb=956B next=04`
+  - `cmd=04 dst=4A5F cb=956B next=0D`
+  - `cmd=0D dst=4ABF cb=95A4 next=0C`
+  - `cmd=0C dst=4ADF cb=95A4 next=FF`
+- `next=FF` causes a reset to index `0`.
+
+
+4) Response Decoding/Formatting
+-------------------------------
+
+Confirmed callback helpers:
+- `nibble_ror4` (`$94D8`): split high/low nibble.
+- `nibble_to_ascii` (`$94DD`): nibble `0..15` -> ASCII `0..9/A..F`.
+- `event_osword_copy` (`$9492`): draws the glyph to screen memory.
+
+Confirmed callback roles (now disassembled):
+- `event_cb_store_pair` (`$956B`)
+  - Takes one response byte and emits two ASCII chars.
+  - Stores both chars into `event_feedback_buf` (`$0C9E+index`).
+  - Also draws both chars to display.
+  - Increments `event_feedback_index` (`$0084`) by 2.
+- `event_cb_store_sign` (`$95D4`)
+  - Converts zero/non-zero response to sign (`'+'`/`'-'`).
+  - Stores sign at `event_feedback_buf[index+1]`.
+  - Stores `CR` (`$0D`) at `event_feedback_buf[index]` to terminate previous string.
+  - Increments `event_feedback_index` by 2.
+- `event_cb_draw_pair` (`$95A4`)
+  - Draws two ASCII digits to screen only (no write into `$0C9E` buffer).
+  - Used by command IDs `0D` and `0C` (speed display path).
+  - Includes a clamp path: when destination low-byte reaches `$DE+`, the second digit is forced to `'0'`.
+
+Confirmed working layout after one full descriptor cycle:
+- `event_feedback_x_text = $0C9F` points to signed 7-char field (`[+/-][6 digits]`), terminated by `CR` at `$0CA6`.
+- `event_feedback_z_text = $0CA7` points to signed 7-char field (`[+/-][6 digits]`), terminated by `CR` at `$0CAE`.
+
+
+5) Manual Mode (CNCMAN) Position/Speed Readback
+------------------------------------------------
+
+Confirmed in `disk/CNCMAN`:
+- `*PLONKON` starts telemetry updates, `*PLONKOFF` stops.
+- Live update routine (`f`) reads ROM-populated text fields:
+  - `TEMP = VAL($&C9F)`
+  - `XSET = INT(XSETP + TEMP*2)`
+  - `TEMP = VAL(MID$($&CA7,7))`
+  - `ZSET = INT(ZSETP + TEMP)`
+- UI formatting in BASIC:
+  - `XSET$` written to `$&CBF`, sign to `?&CBE`
+  - `ZSET$` written to `$&CC7`, sign to `?&CC6`
+  - Unit scaling uses `N%` (`100` metric, `2540` imperial).
+
+Interpretation:
+- X field is multiplied by 2 in CNCMAN, consistent with lathe radius->diameter presentation.
+- Z field is used directly (no `*2`).
+- Speed is refreshed by command IDs `0D/0C` through `event_cb_draw_pair` and drawn straight to the screen update region; CNCMAN does not consume it via `$&C9F/$&CA7`.
+- The `0C` leg hits the `'0'` clamp path, so its least-significant displayed digit is forced to zero (consistent with coarse RPM granularity).
+
+Status-gated update:
+- `event_gate` (`$93DC`) checks `FRED_F0` bit 7 before processing one digit group, so controller-ready state can gate parts of the on-screen refresh.
+
+
+6) Command Sending (from G-code Side)
+-------------------------------------
+
+Confirmed low-level mechanism:
+- Outbound controller command byte is always written to `FRED_80` in `event_main`.
+
+Inferred high-level mapping:
+- G-code/motion routines (`plonk*` handlers) feed internal state that the event/FRED engine services.
+- Exact one-to-one mapping from specific G/M codes to FRED command IDs is not fully identified yet in this pass.
+- Practical reading: FRED protocol already carries both command requests and telemetry polling; command IDs in the descriptor stream are the immediate on-wire opcodes.
+
+
+7) Practical Summary
+--------------------
+
+- Transport: single-byte command / single-byte response over FRED (`$FC80`, `$FCF1`) with ready polling on `$FCF0`.
+- Scheduler: event-vector driven state machine (`EVENTV` hook).
+- Multiplexing: descriptor stream in ROM selects command code, decode callback, destination, and next state.
+- Feedback: decoded continuously into display/status buffers.
+- Outbound control: emitted as command IDs through the same FRED write path.
+
+
+8) Manufacturing + Editor Encoding Path
+---------------------------------------
+
+Scope note:
+- Manufacture runtime is effectively `disk/CNCMAK1` (launched from `disk/CNCMAKE`).
+- Block edit/pack/unpack workflow is in `disk/CNCEDTB`.
+
+Important clarification:
+- `CNCMAKE` itself quickly transfers control to `CNCMAK1` (`PAGE=&1800` then `CHAIN "$.CNCMAK1"` path).
+- The earlier `&850` read seen in `CNCMAKE` is therefore not the active runtime path for manufacture.
+- Active runtime decode in `CNCMAK1` uses `&950..` consistently.
+
+ROM block codec (`*PLONKG` / `*PLONKP`)
+- `plonkg_hnd` (`$9D00`) unpack:
+  - Input pointer: `plonk_stream_ptr_lo/hi` (`$7C/$7D`)
+  - Output table: `plonkg_field_table` (`$0950..$095F`)
+  - Format: first byte is an 8-bit presence mask; each set bit consumes one 16-bit word from stream; clear bit yields zero.
+- `plonkp_hnd` (`$9D4E`) pack:
+  - Reads 8 words from `$0950..$095F`
+  - Writes only non-zero words to stream
+  - Writes generated presence mask byte back to the start of the packed record.
+
+Bit mapping (confirmed from `ASL`/`ROL` order):
+- `bit7=G`, `bit6=M`, `bit5=X`, `bit4=Z`, `bit3=I`, `bit2=K`, `bit1=F`, `bit0=S`.
+
+Codec pseudocode:
+```text
+unpack(mask, stream):
+  for field in [G,M,X,Z,I,K,F,S]:
+    if mask bit for field set: read next 16-bit word from stream
+    else: field = 0
+
+pack(fields):
+  mask = 0
+  for field in [G,M,X,Z,I,K,F,S]:
+    if field != 0: set mask bit and emit 16-bit word
+  write mask at record start
+```
+
+Pointer swap helper (`*PLONK#`)
+- `plonk_hash_hnd` (`$9D9D`) swaps stream pointers:
+  - exchanges `$7C/$7D` with `$70/$71`.
+- `CNCEDTB` uses this around pack calls so it can decode from one buffer while encoding to another.
+
+Field order used by editor/runtime:
+- `G, M, X, Z, I, K, F, S` (8 words).
+- `CNCEDTB` decodes with `*PLONKG`, reads words from `&950+2*n`, and edits these columns.
+- End-of-program detection in editor scan uses decoded `M` (`?&952`) values `2` or `99`.
+
+`CNCEDTB` buffer usage:
+- Pointer table is staged at `&1100` and record data area is `&1350..` (editor copy target).
+- During decode pass, `*PLONKG` reads from `!&7C` and fills `&950..` scratch fields.
+- During encode pass, edited fields are written back to `&950..`, then `*PLONKP` emits compact records.
+
+Manufacture execution calls (`CNCMAK1`)
+- Decode next block: `*PLONKG`, then read `&950..&95F`.
+- Mode/preset select: `?&910=<id> : *PLONKT` (`a_cfg_dispatch` in ROM).
+- Step execution: load `?&961/?&962/?&963/?&964`, then `*PLONKD`.
+- Re-init paths use `*PLONKS`.
+
+Interpretation:
+- Programs are transmitted as compact binary blocks, not ASCII G-code text.
+- PLONK commands implement unpack -> parameter staging -> motion/state execution -> optional repack/save.

@@ -1,0 +1,140 @@
+TCL 202 ROM Disassembly Notes
+=============================
+
+Status
+- Working ROM: `tcl125_2.02.rom` loaded at `$8000-$BFFF`
+- Main outputs:
+  - Symbol file: `tcl202_sym.asm`
+  - Disassembly control: `control`
+  - Generated listing: `tcl202.asm`
+
+Workflow
+- Add symbols and data/code hints in `tcl202_sym.asm` and `control`.
+- Re-run BeebDis:
+  - `/usr/local/bin/BeebDis control`
+- Review regenerated names in `tcl202.asm`.
+
+Known Command Parsing
+- Primary command entry: `command` at `$8015`.
+- Secondary command entry: `command_2` at `$901A`.
+- Done return paths:
+  - `command_done` at `$805A`
+  - `command_done_2` at `$905F`
+- Error/unknown return paths:
+  - `no_command` at `$805F`
+  - `no_command_2` at `$9064`
+
+PLONK Command Family
+- Commands are parsed as `*PLONK<suffix>`.
+- Suffix handlers mapped:
+  - `x` -> `plonkx_hnd` (`$A07A`)
+  - `s` -> `plonks_hnd` (`$A4C7`)
+  - `d` -> `plonkd_hnd` (`$A519`)
+  - `t` -> `plonkt_hnd` (`$A6B0`)
+  - `c` -> `plonkc_hnd` (`$ABA7`)
+  - `8` -> `plonk8_hnd` (`$9E66`)
+  - `4` -> `plonk4_hnd` (`$9E6C`)
+  - `y` -> `plonky_hnd` (`$A000`)
+  - `m` -> `plonkm_hnd` (`$9E00`)
+  - `1` -> `plonk1_hnd` (`$9E9C`)
+  - `p` -> `plonkp_hnd` (`$9D4E`)
+  - `g` -> `plonkg_hnd` (`$9D00`)
+  - `#` -> `plonk_hash_hnd` (`$9D9D`)
+  - `?` -> `plonk_q_hnd` (`$9703`)
+  - `-` -> `plonk_dash_hnd` (`$8408`)
+
+Help/Info Routines
+- `help_char_out` (`$8167`) and `help2_out` (`$9150`) print banner/help text if command tail is CR.
+- `plonk_q_hnd` (`$9703`) selects and prints help text chunks by setting a pointer and iterating until `@` (`$40`).
+
+Data/Code Boundary Notes
+- Region at `$9DB0-$9DFF` appears to be data and is forced with:
+  - `byte $9db0 80` in `control`
+- This removed a bad code decode in the middle of `plonk_hash_hnd`.
+
+Current Understanding of `$8D00` Block
+- Entry is used by `cmd_plonk0`.
+- Appears to be a stepping/interpolation loop that:
+  - Maintains two counters (`L1140/41` and `L1145/46`)
+  - Updates accumulators (`L11C0/1` and `L11C5/6`)
+  - Emits movement via `plonkx_hnd` when position changes
+- Exact axis naming still pending; labels currently stay neutral.
+- Working hypothesis:
+  - This is a line-step style interpolator (Bresenham-like decision branches) for two coordinated motion components.
+  - Keep this as hypothesis until cross-checked against calling code and machine behavior.
+
+Naming Style Used
+- Prefer neutral, behavior-based names when semantics are uncertain.
+- Avoid over-committing to machine/axis meaning until cross-verified.
+
+Recent Utility Naming (A0xx Core)
+- Added neutral helper names for common utility routines used throughout the A0xx motion core:
+  - `a_move_dec`, `a_move_inc`, `a_move_dec_fine`, `a_move_inc_fine`
+  - `a_cmp_window`, `a_calc_phase_delta`
+  - `a_phase_dec`, `a_phase_inc`
+  - `a_scan_init`, `a_scan_load`
+- These names are intentionally conservative and may be refined when full behavior is confirmed.
+
+Recent Parser Cleanup
+- Named secondary command type-dispatch checks near `$9007`:
+  - `cmd2_type_dispatch`, `cmd2_type_check_00`, `cmd2_type_check_04`
+- Finished residual `plonk_q_hnd` selector branch label at `$978E`.
+
+Recent A0xx Flow Naming
+- Added neutral case/flow labels for the main A0xx control branch tree:
+  - `a0_eval*`, `a0_mode2*`, `a0_gate_path*`
+  - `a0_case1`..`a0_case4` and their loop/check/step labels
+- These labels are intentionally structural (control-flow oriented), not axis-semantic.
+
+Recent Event/Parser Naming
+- Named secondary `cmd2` comparison chain labels (`cmd2_chk_*`) for the `$9051-$90D4` path.
+- Named event update flow around `event_handler`:
+  - tick/wrap points (`event_tick_wrap`, `event_digit*_wrap`)
+  - FRED/OSWORD transfer loops (`event_osword_copy`, `event_copy_hi_loop`, `event_copy_lo_loop`)
+  - main dispatch (`event_main`, `event_dispatch_indirect`, `event_main_poll`)
+
+CNCMAN Manual-Mode Telemetry Findings
+- `disk/CNCMAN` uses `*PLONKON` / `*PLONKOFF` to start/stop live feedback.
+- ROM descriptor stream at `$9538` cycles command IDs:
+  - `03,02,01,00,07,06,05,04,0D,0C`
+- Callback decode now disassembled and named:
+  - `event_cb_store_sign` (`$95D4`): writes `+/-` and `CR` separators in feedback buffer.
+  - `event_cb_store_pair` (`$956B`): writes 2 ASCII digits per response byte.
+  - `event_cb_draw_pair` (`$95A4`): draws speed digits only.
+  - `event_cb_draw_pair` forces its second digit to `'0'` on the `0C` destination path (likely 10-RPM quantization).
+- Feedback text buffer framing produced by one full cycle:
+  - X text at `$0C9F` (sign + 6 digits, terminated at `$0CA6`)
+  - Z text at `$0CA7` (sign + 6 digits, terminated at `$0CAE`)
+- CNCMAN conversion formulas:
+  - `TEMP=VAL($&C9F)` then `XSET=INT(XSETP+TEMP*2)`
+  - `TEMP=VAL(MID$($&CA7,7))` then `ZSET=INT(ZSETP+TEMP)`
+  - X uses `*2` (radius->diameter presentation), Z uses direct scaling.
+
+CNC Manufacturing/Editor Encoding Findings
+- `disk/CNCMAKE` hands off quickly to `disk/CNCMAK1` (active manufacturing runtime).
+- Active `CNCMAK1` decode path uses:
+  - `*PLONKG`
+  - read 8 words from `&950..&95F`
+  - map to `G,M,X,Z,I,K,F,S`
+- ROM block format (`plonkg_hnd` / `plonkp_hnd`):
+  - packed record starts with 1-byte presence mask
+  - each set bit corresponds to one 16-bit field payload
+  - clear-bit fields decode as zero
+  - packer writes mask + sparse 16-bit words back to stream
+- `CNCEDTB` confirms same format:
+  - decode: `*PLONKG` then read `&950+2*n`
+  - encode: write edited fields to `&950+2*n`, call `*PLONKP`
+  - field order label: `G,M,X,Z,I,K,F,S`
+  - end marker check during scan: decoded `M` at `?&952` equals `2` or `99`
+- Presence-mask bit order (confirmed):
+  - `bit7 G`, `bit6 M`, `bit5 X`, `bit4 Z`, `bit3 I`, `bit2 K`, `bit1 F`, `bit0 S`
+- `*PLONK#` pointer-swap role:
+  - swaps `&7C/&7D` with `&70/&71`
+  - editor uses this to alternate read stream vs write stream during rewrite passes
+- `*PLONKT` still driven by `?&910` config ID (`a_cfg_dispatch` / preset select).
+
+Recent Late-Pass Cleanup
+- Named remaining helper loops in:
+  - `9Fxx` tick fanout path (`event_tick_flip*`, `event_tick_fanout*`)
+  - `83xx` PLONK A/B/E/F scan/copy/fill helpers
+  - `AFxx` tail checks (`a_span_tail`, `a_toolchk_*`)

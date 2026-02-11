@@ -5,11 +5,10 @@ L0003           = $0003
 L0004           = $0004
 L0005           = $0005
 L0006           = $0006
-L0007           = $0007
 L0008           = $0008
 L000B           = $000B
-L000D           = $000D
 L000E           = $000E
+L000F           = $000F
 L0019           = $0019
 L001F           = $001F
 L002F           = $002F
@@ -25,30 +24,30 @@ L006A           = $006A
 L006C           = $006C
 L006D           = $006D
 L006F           = $006F
-L0070           = $0070
-L0071           = $0071
+plonk_alt_ptr_lo = $0070
+plonk_alt_ptr_hi = $0071
 L0072           = $0072
 L0073           = $0073
 L0074           = $0074
 L0075           = $0075
 L0076           = $0076
 L0077           = $0077
-L0079           = $0079
-L007A           = $007A
-L007B           = $007B
-L007C           = $007C
-L007D           = $007D
-L007E           = $007E
-L007F           = $007F
+plonk_pack_save_ptr_lo = $0079
+plonk_pack_save_ptr_hi = $007A
+plonk_field_offset = $007B
+plonk_stream_ptr_lo = $007C
+plonk_stream_ptr_hi = $007D
+plonk_field_mask = $007E
+plonk_zero_word = $007F
 L0080           = $0080
 L0082           = $0082
 L0083           = $0083
-L0084           = $0084
+event_feedback_index = $0084
 L0085           = $0085
 L0086           = $0086
 L0087           = $0087
-L0088           = $0088
-L0089           = $0089
+event_feedback_dst_lo = $0088
+event_feedback_dst_hi = $0089
 L008B           = $008B
 L008C           = $008C
 L008D           = $008D
@@ -77,7 +76,6 @@ L00EE           = $00EE
 os_text_ptr     = $00F2
 L00F4           = $00F4
 L0100           = $0100
-L0141           = $0141
 USERV           = $0200
 BRKV            = $0202
 IRQ1V           = $0204
@@ -115,7 +113,7 @@ L0600           = $0600
 L0604           = $0604
 L0605           = $0605
 L08C0           = $08C0
-L0910           = $0910
+plonk_cfg_id    = $0910
 L0911           = $0911
 L0912           = $0912
 L0913           = $0913
@@ -132,7 +130,7 @@ L0934           = $0934
 L0935           = $0935
 L0936           = $0936
 L0937           = $0937
-L0950           = $0950
+plonkg_field_table = $0950
 L0960           = $0960
 L0961           = $0961
 L0962           = $0962
@@ -172,10 +170,14 @@ L0C90           = $0C90
 L0C91           = $0C91
 L0C92           = $0C92
 L0C93           = $0C93
-L0C9E           = $0C9E
-L0CBD           = $0CBD
-L0CE0           = $0CE0
-L0CEF           = $0CEF
+event_feedback_buf = $0C9E
+event_feedback_x_text = $0C9F
+event_feedback_x_term = $0CA6
+event_feedback_z_text = $0CA7
+event_feedback_z_term = $0CAE
+event_feedback_glyph_lut = $0CBD
+event_feedback_glyph = $0CE0
+event_feedback_saved_y = $0CEF
 L0CF0           = $0CF0
 L0CF1           = $0CF1
 L0CF2           = $0CF2
@@ -314,7 +316,7 @@ OSCLI           = $FFF7
 
                 EQUW    $0000
 
-.L8003          JMP     service
+.rom_entry_jmp  JMP     service
 
                 EQUB    $80
 
@@ -333,7 +335,7 @@ OSCLI           = $FFF7
 .service        CMP     #$04
                 BEQ     command
 
-                JMP     L814B
+                JMP     help1_check_tab
 
 .command        TYA
                 PHA
@@ -350,8 +352,8 @@ OSCLI           = $FFF7
 
                 INY
                 LDA     (os_text_ptr),Y
-.L8029          CMP     #$4F
-L802A = L8029+1
+.command_chk_o  CMP     #$4F
+L802A = command_chk_o+1
                 BNE     no_command
 
                 INY
@@ -374,9 +376,9 @@ L802A = L8029+1
                 CMP     #$4E
                 BNE     cmd_plonk_not_n
 
-.L8049          JMP     cmd_plonkon
+.cmd_plonk_dispatch_tailJMPcmd_plonkon
 
-L804A = L8049+1
+L804A = cmd_plonk_dispatch_tail+1
 .cmd_plonk_not_nCMP     #$46
                 BNE     no_command
 
@@ -479,7 +481,7 @@ L804A = L8049+1
 
                 JMP     cmd_plonk?
 
-.cmd_plonk_not_?JMP     L830C
+.cmd_plonk_not_?JMP     plonk_abef_cmd
 
 .cmd_plonkon    JSR     PLONKON
 
@@ -493,63 +495,63 @@ L804A = L8049+1
 
                 JMP     command_done
 
-.cmd_plonkx     JSR     LA07A
+.cmd_plonkx     JSR     plonkx_hnd
 
                 JMP     command_done
 
-.cmd_plonks     JSR     LA4C4
+.cmd_plonks     JSR     a_plonks_init
 
                 JMP     command_done
 
-.cmd_plonkd     JSR     LA50C
+.cmd_plonkd     JSR     a_scan_init
 
                 JMP     command_done
 
-.cmd_plonkt     JSR     LA68E
+.cmd_plonkt     JSR     a_cfg_dispatch
 
                 JMP     command_done
 
-.cmd_plonkc     JSR     LAB85
+.cmd_plonkc     JSR     a_stream_init
 
                 JMP     command_done
 
-.cmd_plonk0     JSR     L8D00
+.cmd_plonk0     JSR     plonk0_hnd
 
                 JMP     command_done
 
-.cmd_plonk8     JSR     L9E66
+.cmd_plonk8     JSR     plonk8_hnd
 
                 JMP     command_done
 
-.cmd_plonk4     JSR     L9E6C
+.cmd_plonk4     JSR     plonk4_hnd
 
                 JMP     command_done
 
-.cmd_plonky     JSR     LA000
+.cmd_plonky     JSR     plonky_hnd
 
                 JMP     command_done
 
-.cmd_plonkm     JSR     L9E00
+.cmd_plonkm     JSR     plonkm_hnd
 
                 JMP     command_done
 
-.cmd_plonk1     JSR     L9E9C
+.cmd_plonk1     JSR     plonk1_hnd
 
                 JMP     command_done
 
-.cmd_plonkp     JSR     L9D4E
+.cmd_plonkp     JSR     plonkp_hnd
 
                 JMP     command_done
 
-.cmd_plonkg     JSR     L9D00
+.cmd_plonkg     JSR     plonkg_hnd
 
                 JMP     command_done
 
-.cmd_plonk#     JSR     L9D9D
+.cmd_plonk#     JSR     plonk_hash_hnd
 
                 JMP     command_done
 
-.cmd_plonk?     JSR     L9703
+.cmd_plonk?     JSR     plonk_q_hnd
 
                 JMP     command_done
 
@@ -557,44 +559,44 @@ L804A = L8049+1
 
                 JMP     command_done
 
-.L814B          CMP     #$09
-                BEQ     L8150
+.help1_check_tabCMP     #$09
+                BEQ     help1_save_regs
 
                 RTS
 
-.L8150          TYA
+.help1_save_regsTYA
                 PHA
                 TXA
                 PHA
-.L8154          LDA     (os_text_ptr),Y
+.help1_skip_spacesLDA   (os_text_ptr),Y
                 CMP     #$20
-                BNE     L815E
+                BNE     help1_eol_check
 
                 INY
-                JMP     L8154
+                JMP     help1_skip_spaces
 
-.L815E          CMP     #$0D
-                BNE     L8173
+.help1_eol_checkCMP     #$0D
+                BNE     help1_done
 
                 JSR     OSNEWL
 
                 LDX     #$00
-.help_char_out  LDA     L817A,X
-                BEQ     L8173
+.help_char_out  LDA     help1_banner,X
+                BEQ     help1_done
 
                 JSR     OSWRCH
 
                 INX
                 JMP     help_char_out
 
-.L8173          PLA
+.help1_done     PLA
                 TAX
                 PLA
                 TAY
                 LDA     #$09
                 RTS
 
-.L817A          EQUS    "MW CONTROLS TCL 125/240"
+.help1_banner   EQUS    "MW CONTROLS TCL 125/240"
 
                 EQUB    $0A,$0D
 
@@ -609,10 +611,10 @@ L804A = L8049+1
                 BRK
                 EQUB    $30
 
-                BVC     L81AD
+                BVC     service_data_81ad
 
                 BRK
-.L81AD          EQUB    $FF
+.service_data_81adEQUB  $FF
 
                 BRK
                 EQUB    $FF
@@ -626,7 +628,7 @@ L804A = L8049+1
                 INY
                 DEY
                 ORA     (L000E),Y
-                ORA     L007F,X
+                ORA     plonk_zero_word,X
                 ORA     (L0000,X)
                 ASL     L0003
                 BRK
@@ -676,15 +678,15 @@ L804A = L8049+1
 
                 ORA     L0006
                 PHP
-.L81FF          ORA     #$A2
-L8200 = L81FF+1
+.service_data_81ffORA   #$A2
+L8200 = service_data_81ff+1
                 BRK
-.L8202          EQUB    $BD
+.service_data_8202EQUB  $BD
 
                 ASL     L2082
                 INX
                 CPX     #$EB
-                BNE     L8202
+                BNE     service_data_8202
 
                 RTS
 
@@ -726,14 +728,14 @@ L8200 = L81FF+1
                 INC     L1902
                 STX     L0002,Y
                 LDY     L0003
-                ORA     L9605,Y
+                ORA     plonk_data_9605,Y
                 INC     L1902
                 ROL     L0003
                 LDY     L0003
                 ORA     L2605,Y
                 INC     L1902
                 LDY     L0003
-                ORA     LB705,Y
+                ORA     misc_data_b705,Y
                 INC     L1902
                 LDY     L0003
                 ORA     L4705,Y
@@ -752,7 +754,7 @@ L8200 = L81FF+1
                 EQUB    $89
 
                 ORA     L0005,Y
-                ORA     L0089
+                ORA     event_feedback_dst_hi
                 ORA     L0004,Y
                 BRK
                 EQUB    $8D
@@ -782,181 +784,181 @@ L8200 = L81FF+1
                 EQUB    $1F,$3E,$03,$46,$1F,$47,$03,$53
                 EQUB    $87,$84,$88,$20,$FF,$11,$20
 
-.L8300          PLA
+.plonk_abef_donePLA
                 PLA
                 LDA     #$00
                 RTS
 
-.L8305          PLA
+.plonk_abef_no_cmdPLA
                 TAX
                 PLA
                 TAY
                 LDA     #$04
                 RTS
 
-.L830C          PHA
+.plonk_abef_cmd PHA
                 LDA     #$00
                 STA     L0072
                 PLA
                 CMP     #$41
-                BNE     L8319
+                BNE     plonk_abef_chk_b
 
-                JMP     L832E
+                JMP     plonk_abef_set_a
 
-.L8319          CMP     #$42
-                BNE     L8320
+.plonk_abef_chk_bCMP    #$42
+                BNE     plonk_abef_chk_e
 
-                JMP     L8339
+                JMP     plonk_abef_set_b
 
-.L8320          CMP     #$45
-                BNE     L8327
+.plonk_abef_chk_eCMP    #$45
+                BNE     plonk_abef_chk_f
 
-                JMP     L8344
+                JMP     plonk_abef_set_e
 
-.L8327          CMP     #$46
-                BNE     L8305
+.plonk_abef_chk_fCMP    #$46
+                BNE     plonk_abef_no_cmd
 
-                JMP     L834F
+                JMP     plonk_abef_set_f
 
-.L832E          LDA     #$00
-                STA     L0070
+.plonk_abef_set_aLDA    #$00
+                STA     plonk_alt_ptr_lo
                 LDA     #$84
-                STA     L0071
-                JMP     L835A
+                STA     plonk_alt_ptr_hi
+                JMP     plonk_abef_scan_start
 
-.L8339          LDA     #$80
-                STA     L0070
+.plonk_abef_set_bLDA    #$80
+                STA     plonk_alt_ptr_lo
                 LDA     #$85
-                STA     L0071
-                JMP     L835A
+                STA     plonk_alt_ptr_hi
+                JMP     plonk_abef_scan_start
 
-.L8344          LDA     #$00
-                STA     L0070
+.plonk_abef_set_eLDA    #$00
+                STA     plonk_alt_ptr_lo
                 LDA     #$87
-                STA     L0071
-                JMP     L835A
+                STA     plonk_alt_ptr_hi
+                JMP     plonk_abef_scan_start
 
-.L834F          LDA     #$00
-                STA     L0070
+.plonk_abef_set_fLDA    #$00
+                STA     plonk_alt_ptr_lo
                 LDA     #$8A
-                STA     L0071
-                JMP     L835A
+                STA     plonk_alt_ptr_hi
+                JMP     plonk_abef_scan_start
 
-.L835A          LDY     #$00
+.plonk_abef_scan_startLDY#$00
                 STY     L0072
                 LDA     #$19
                 STA     L0073
-.L8362          LDA     (L0072),Y
+.plonk_abef_find_xxxxLDA(L0072),Y
                 CMP     #$58
-                BNE     L8380
+                BNE     plonk_abef_find_xxxx_next
 
                 INY
                 LDA     (L0072),Y
                 CMP     #$58
-                BNE     L837F
+                BNE     plonk_abef_scan_back1
 
                 INY
                 LDA     (L0072),Y
                 CMP     #$58
-                BNE     L837E
+                BNE     plonk_abef_scan_back2
 
                 INY
                 LDA     (L0072),Y
                 CMP     #$58
-                BEQ     L838E
+                BEQ     plonk_abef_found_xxxx
 
                 DEY
-.L837E          DEY
-.L837F          DEY
-.L8380          LDA     L0072
+.plonk_abef_scan_back2DEY
+.plonk_abef_scan_back1DEY
+.plonk_abef_find_xxxx_nextLDAL0072
                 CLC
                 ADC     #$01
                 STA     L0072
-                BCC     L838B
+                BCC     plonk_abef_scan_next_jmp
 
                 INC     L0073
-.L838B          JMP     L8362
+.plonk_abef_scan_next_jmpJMPplonk_abef_find_xxxx
 
-.L838E          LDA     L0072
+.plonk_abef_found_xxxxLDAL0072
                 CLC
                 ADC     #$04
                 STA     L0072
-                BCC     L8399
+                BCC     plonk_abef_copy_start
 
                 INC     L0073
-.L8399          LDY     #$00
-.L839B          LDA     (L0070),Y
+.plonk_abef_copy_startLDY#$00
+.plonk_abef_copy_loopLDA(plonk_alt_ptr_lo),Y
                 STA     (L0072),Y
                 CMP     #$0D
-                BNE     L83AB
+                BNE     plonk_abef_inc_src
 
                 INY
-                LDA     (L0070),Y
+                LDA     (plonk_alt_ptr_lo),Y
                 CMP     #$FF
-                BEQ     L83C3
+                BEQ     plonk_abef_copy_done
 
                 DEY
-.L83AB          LDA     L0070
+.plonk_abef_inc_srcLDA  plonk_alt_ptr_lo
                 CLC
                 ADC     #$01
-                STA     L0070
-                BCC     L83B6
+                STA     plonk_alt_ptr_lo
+                BCC     plonk_abef_inc_dst
 
-                INC     L0071
-.L83B6          LDA     L0072
+                INC     plonk_alt_ptr_hi
+.plonk_abef_inc_dstLDA  L0072
                 CLC
                 ADC     #$01
                 STA     L0072
-                BCC     L839B
+                BCC     plonk_abef_copy_loop
 
                 INC     L0073
-                BCS     L839B
+                BCS     plonk_abef_copy_loop
 
-.L83C3          STA     (L0072),Y
+.plonk_abef_copy_doneSTA(L0072),Y
                 LDA     L0072
                 CLC
                 ADC     #$02
                 STA     L0072
-                BCC     L83D0
+                BCC     plonk_abef_finish_jmp
 
                 INC     L0073
-.L83D0          JMP     L8300
+.plonk_abef_finish_jmpJMPplonk_abef_done
 
                 LDA     #$4E
                 STA     L0077
                 LDX     #$A0
-.L83D9          CLC
+.plonk_fill_ff  CLC
                 LDA     L0076
                 ADC     #$08
                 STA     L0076
-                BCC     L83E4
+                BCC     plonk_fill_ff_store
 
                 INC     L0077
-.L83E4          LDA     #$FF
+.plonk_fill_ff_storeLDA #$FF
                 STA     (L0076),Y
                 DEX
-                BNE     L83D9
+                BNE     plonk_fill_ff
 
                 RTS
 
-.L83EC          LDY     #$00
+.plonk_fill_ptr LDY     #$00
                 LDA     #$FF
-                STA     (L0070),Y
-                INC     L0070
-                BNE     L83F8
+                STA     (plonk_alt_ptr_lo),Y
+                INC     plonk_alt_ptr_lo
+                BNE     plonk_fill_cmp
 
-                INC     L0071
-.L83F8          LDA     L0070
+                INC     plonk_alt_ptr_hi
+.plonk_fill_cmp LDA     plonk_alt_ptr_lo
                 CMP     L0072
-                BNE     L83EC
+                BNE     plonk_fill_ptr
 
-                LDA     L0071
+                LDA     plonk_alt_ptr_hi
                 ORA     L401F
                 CMP     L50F2,X
                 AND     L228E,X
                 EQUS    ""$.HELP""
 
-.L8413          ORA     L4A1F
+.basic_data_8413ORA     L4A1F
                 BIT     L00E8
                 EQUS    "#c,G%,MA,A$:"
 
@@ -1044,7 +1046,7 @@ L8200 = L81FF+1
 
                 EQUS    "("
 
-.L850E          EQUS    "$&1310)/G%;"
+.basic_data_850eEQUS    "$&1310)/G%;"
 
                 EQUB    $8A
 
@@ -1294,7 +1296,7 @@ L8200 = L81FF+1
 
                 EQUB    $0D,$1F,$9A,$0E,$E7
 
-.L8900          EQUS    "N=0"
+.basic_data_8900EQUS    "N=0"
 
                 EQUB    $8C,$E5,$8D,$64,$4C,$5F,$0D,$1F
                 EQUB    $A4,$18,$E6
@@ -1489,37 +1491,37 @@ L8200 = L81FF+1
                 EQUB    $00,$00,$00,$00,$00,$00,$00,$00
                 EQUB    $00,$F2,$E2,$2B,$FF
 
-.L8D00          LDA     #$01
+.plonk0_hnd     LDA     #$01
                 STA     L1120
                 STA     L1125
                 LDA     #$00
                 STA     L1119
                 STA     L111A
-.L8D10          LDA     L1140
-                BNE     L8D22
+.plonk0_loop    LDA     L1140
+                BNE     plonk0_case_alt
 
                 LDA     L1141
-                BNE     L8D22
+                BNE     plonk0_case_alt
 
                 LDA     L1145
                 CLC
                 CMP     #$01
-                BCS     L8D36
+                BCS     plonk0_step_z_only
 
-.L8D22          LDA     L1145
-                BNE     L8D74
+.plonk0_case_altLDA     L1145
+                BNE     plonk0_calc_abs_1
 
                 LDA     L1146
-                BNE     L8D74
+                BNE     plonk0_calc_abs_1
 
                 LDA     L1140
                 CLC
                 CMP     #$01
-                BCS     L8D55
+                BCS     plonk0_step_x_only
 
-                BCC     L8D74
+                BCC     plonk0_calc_abs_1
 
-.L8D36          LDA     L11A5
+.plonk0_step_z_onlyLDA  L11A5
                 STA     L1125
                 LDA     #$01
                 STA     L1120
@@ -1530,9 +1532,9 @@ L8200 = L81FF+1
                 LDA     L1146
                 SBC     #$00
                 STA     L1146
-                JMP     L8F3C
+                JMP     plonk0_post_step
 
-.L8D55          LDA     L11A0
+.plonk0_step_x_onlyLDA  L11A0
                 STA     L1120
                 LDA     #$01
                 STA     L1125
@@ -1543,9 +1545,9 @@ L8200 = L81FF+1
                 LDA     L1141
                 SBC     #$00
                 STA     L1141
-                JMP     L8F3C
+                JMP     plonk0_post_step
 
-.L8D74          LDA     L1115
+.plonk0_calc_abs_1LDA   L1115
                 CLC
                 ADC     L1119
                 STA     L1100
@@ -1553,7 +1555,7 @@ L8200 = L81FF+1
                 ADC     L111A
                 STA     L1101
                 AND     #$80
-                BEQ     L8DA0
+                BEQ     plonk0_calc_abs_2
 
                 LDA     L1100
                 CLC
@@ -1564,7 +1566,7 @@ L8200 = L81FF+1
                 EOR     #$FF
                 ADC     #$00
                 STA     L1101
-.L8DA0          LDA     L1110
+.plonk0_calc_abs_2LDA   L1110
                 CLC
                 ADC     L1119
                 STA     L1105
@@ -1572,7 +1574,7 @@ L8200 = L81FF+1
                 ADC     L111A
                 STA     L1106
                 AND     #$80
-                BEQ     L8DCC
+                BEQ     plonk0_calc_abs_sum
 
                 LDA     L1105
                 CLC
@@ -1583,7 +1585,7 @@ L8200 = L81FF+1
                 EOR     #$FF
                 ADC     #$00
                 STA     L1106
-.L8DCC          LDA     L1115
+.plonk0_calc_abs_sumLDA L1115
                 CLC
                 ADC     L1119
                 STA     L1109
@@ -1598,7 +1600,7 @@ L8200 = L81FF+1
                 ADC     L1111
                 STA     L110A
                 AND     #$80
-                BEQ     L8E0B
+                BEQ     plonk0_compare_1_hi
 
                 LDA     L1109
                 CLC
@@ -1609,35 +1611,35 @@ L8200 = L81FF+1
                 EOR     #$FF
                 ADC     #$00
                 STA     L110A
-.L8E0B          LDA     L110A
+.plonk0_compare_1_hiLDA L110A
                 CLC
                 CMP     L1101
-                BEQ     L8E18
+                BEQ     plonk0_compare_1_lo
 
-                BCC     L8E7A
+                BCC     plonk0_compare_for_both
 
-                BCS     L8E21
+                BCS     plonk0_compare_2_hi
 
-.L8E18          LDA     L1100
+.plonk0_compare_1_loLDA L1100
                 CLC
                 CMP     L1109
-                BCS     L8E7A
+                BCS     plonk0_compare_for_both
 
-.L8E21          LDA     L1106
+.plonk0_compare_2_hiLDA L1106
                 CLC
                 CMP     L1101
-                BEQ     L8E2E
+                BEQ     plonk0_compare_2_lo
 
-                BCC     L8E7A
+                BCC     plonk0_compare_for_both
 
-                BCS     L8E37
+                BCS     plonk0_take_x_step
 
-.L8E2E          LDA     L1100
+.plonk0_compare_2_loLDA L1100
                 CLC
                 CMP     L1105
-                BCS     L8E77
+                BCS     plonk0_take_z_step_jmp
 
-.L8E37          LDA     L11A0
+.plonk0_take_x_stepLDA  L11A0
                 STA     L1120
                 LDA     #$01
                 STA     L1125
@@ -1659,22 +1661,22 @@ L8200 = L81FF+1
                 CLC
                 ADC     #$02
                 STA     L1115
-                BCC     L8E74
+                BCC     plonk0_after_x_step
 
                 INC     L1116
-.L8E74          JMP     L8F3C
+.plonk0_after_x_stepJMP plonk0_post_step
 
-.L8E77          JMP     L8EFF
+.plonk0_take_z_step_jmpJMPplonk0_take_z_step
 
-.L8E7A          LDA     L1106
+.plonk0_compare_for_bothLDAL1106
                 CLC
                 CMP     L110A
-                BCC     L8EFF
+                BCC     plonk0_take_z_step
 
                 LDA     L1105
                 CLC
                 CMP     L1109
-                BCC     L8EFF
+                BCC     plonk0_take_z_step
 
                 LDA     L11A5
                 STA     L1125
@@ -1712,19 +1714,19 @@ L8200 = L81FF+1
                 CLC
                 ADC     #$02
                 STA     L1115
-                BCC     L8EEE
+                BCC     plonk0_after_both_step_1
 
                 INC     L1116
-.L8EEE          LDA     L1110
+.plonk0_after_both_step_1LDAL1110
                 CLC
                 ADC     #$02
                 STA     L1110
-                BCC     L8EFC
+                BCC     plonk0_after_both_step_2
 
                 INC     L1111
-.L8EFC          JMP     L8F3C
+.plonk0_after_both_step_2JMPplonk0_post_step
 
-.L8EFF          LDA     L11A5
+.plonk0_take_z_stepLDA  L11A5
                 STA     L1125
                 LDA     #$01
                 STA     L1120
@@ -1746,72 +1748,72 @@ L8200 = L81FF+1
                 CLC
                 ADC     #$02
                 STA     L1110
-                BCC     L8F3C
+                BCC     plonk0_post_step
 
                 INC     L1111
-.L8F3C          LDA     L11C5
+.plonk0_post_stepLDA    L11C5
                 CLC
                 ADC     #$01
                 STA     L11C5
-                BCC     L8F4A
+                BCC     plonk0_post_step_x
 
                 INC     L11C6
-.L8F4A          LDA     L11C0
+.plonk0_post_step_xLDA  L11C0
                 CLC
                 ADC     #$01
                 STA     L11C0
-                BCC     L8F58
+                BCC     plonk0_post_step_z
 
                 INC     L11C1
-.L8F58          LDA     L11C5
+.plonk0_post_step_zLDA  L11C5
                 SEC
                 SBC     L1120
                 STA     L11C5
-                BCS     L8F67
+                BCS     plonk0_post_step_w
 
                 DEC     L11C6
-.L8F67          LDA     L11C0
+.plonk0_post_step_wLDA  L11C0
                 SEC
                 SBC     L1125
                 STA     L11C0
-                BCS     L8F76
+                BCS     plonk0_done_check_1141
 
                 DEC     L11C1
-.L8F76          LDA     L1141
-                BEQ     L8F7D
+.plonk0_done_check_1141LDAL1141
+                BEQ     plonk0_done_check_1146
 
-                BNE     L8F93
+                BNE     plonk0_check_emit
 
-.L8F7D          LDA     L1146
-                BEQ     L8F84
+.plonk0_done_check_1146LDAL1146
+                BEQ     plonk0_done_check_1140
 
-                BNE     L8F93
+                BNE     plonk0_check_emit
 
-.L8F84          LDA     L1140
-                BEQ     L8F8B
+.plonk0_done_check_1140LDAL1140
+                BEQ     plonk0_done_check_1145
 
-                BNE     L8F93
+                BNE     plonk0_check_emit
 
-.L8F8B          LDA     L1145
-                BEQ     L8F92
+.plonk0_done_check_1145LDAL1145
+                BEQ     plonk0_done
 
-                BNE     L8F93
+                BNE     plonk0_check_emit
 
-.L8F92          RTS
+.plonk0_done    RTS
 
-.L8F93          LDA     L11C5
+.plonk0_check_emitLDA   L11C5
                 CMP     L1158
-                BNE     L8F9E
+                BNE     plonk0_check_emit_2
 
-                JMP     L8D10
+                JMP     plonk0_loop
 
-.L8F9E          LDA     L11C0
+.plonk0_check_emit_2LDA L11C0
                 CMP     L1159
-                BNE     L8FA9
+                BNE     plonk0_emit
 
-                JMP     L8D10
+                JMP     plonk0_loop
 
-.L8FA9          STA     L1159
+.plonk0_emit    STA     L1159
                 LDA     L11C5
                 STA     L1158
                 SEC
@@ -1827,33 +1829,33 @@ L8200 = L81FF+1
                 LDA     L11C1
                 SBC     #$00
                 STA     L09B1
-                JSR     LA07A
+                JSR     plonkx_hnd
 
-                JMP     L8D10
+                JMP     plonk0_loop
 
-                JMP     L8D10
+                JMP     plonk0_loop
 
                 CMP     #$0D
-                BNE     L9007
+                BNE     cmd2_type_dispatch
 
                 JMP     L802A
 
-.L9007          CMP     #$0E
-                BNE     L900E
+.cmd2_type_dispatchCMP  #$0E
+                BNE     cmd2_type_check_00
 
                 JMP     L804A
 
-.L900E          CMP     #$00
-                BNE     L9013
+.cmd2_type_check_00CMP  #$00
+                BNE     cmd2_type_check_04
 
                 RTS
 
-.L9013          CMP     #$04
-                BEQ     L901A
+.cmd2_type_check_04CMP  #$04
+                BEQ     command_2
 
-                JMP     L9150
+                JMP     help2_out
 
-.L901A          TYA
+.command_2      TYA
                 PHA
                 TXA
                 PHA
@@ -1884,24 +1886,24 @@ L8200 = L81FF+1
                 INY
                 LDA     (os_text_ptr),Y
                 CMP     #$4F
-                BNE     L9058
+                BNE     cmd2_chk_w
 
                 INY
                 LDA     (os_text_ptr),Y
                 CMP     #$4E
-                BNE     L9051
+                BNE     cmd2_chk_on_f
 
-                JMP     L90DE
+                JMP     cmd2_plonkon
 
-.L9051          CMP     #$46
+.cmd2_chk_on_f  CMP     #$46
                 BNE     no_command_2
 
-                JMP     L90E4
+                JMP     cmd2_plonkoff
 
-.L9058          CMP     #$57
-                BNE     L906B
+.cmd2_chk_w     CMP     #$57
+                BNE     cmd2_chk_x
 
-                JMP     L90EA
+                JMP     cmd2_plonkw
 
 .command_done_2 PLA
                 PLA
@@ -1915,202 +1917,202 @@ L8200 = L81FF+1
                 LDA     #$04
                 RTS
 
-.L906B          CMP     #$58
-                BNE     L9072
+.cmd2_chk_x     CMP     #$58
+                BNE     cmd2_chk_s
 
-                JMP     L90F0
+                JMP     cmd2_plonkx
 
-.L9072          CMP     #$53
-                BNE     L9079
+.cmd2_chk_s     CMP     #$53
+                BNE     cmd2_chk_d
 
-                JMP     L90F6
+                JMP     cmd2_plonks
 
-.L9079          CMP     #$44
-                BNE     L9080
+.cmd2_chk_d     CMP     #$44
+                BNE     cmd2_chk_t
 
-                JMP     L90FC
+                JMP     cmd2_plonkd
 
-.L9080          CMP     #$54
-                BNE     L9087
+.cmd2_chk_t     CMP     #$54
+                BNE     cmd2_chk_c
 
-                JMP     L9102
+                JMP     cmd2_plonkt
 
-.L9087          CMP     #$43
-                BNE     L908E
+.cmd2_chk_c     CMP     #$43
+                BNE     cmd2_chk_0
 
-                JMP     L9108
+                JMP     cmd2_plonkc
 
-.L908E          CMP     #$30
-                BNE     L9095
+.cmd2_chk_0     CMP     #$30
+                BNE     cmd2_chk_8
 
-                JMP     L910E
+                JMP     cmd2_plonk0
 
-.L9095          CMP     #$38
-                BNE     L909C
+.cmd2_chk_8     CMP     #$38
+                BNE     cmd2_chk_y
 
-                JMP     L9114
+                JMP     cmd2_plonk8
 
-.L909C          CMP     #$59
-                BNE     L90A3
+.cmd2_chk_y     CMP     #$59
+                BNE     cmd2_chk_4
 
-                JMP     L9120
+                JMP     cmd2_plonky
 
-.L90A3          CMP     #$34
-                BNE     L90AA
+.cmd2_chk_4     CMP     #$34
+                BNE     cmd2_chk_m
 
-                JMP     L911A
+                JMP     cmd2_plonk4
 
-.L90AA          CMP     #$4D
-                BNE     L90B1
+.cmd2_chk_m     CMP     #$4D
+                BNE     cmd2_chk_1
 
-                JMP     L9126
+                JMP     cmd2_plonkm
 
-.L90B1          CMP     #$31
-                BNE     L90B8
+.cmd2_chk_1     CMP     #$31
+                BNE     cmd2_chk_p
 
-                JMP     L912C
+                JMP     cmd2_plonk1
 
-.L90B8          CMP     #$50
-                BNE     L90BF
+.cmd2_chk_p     CMP     #$50
+                BNE     cmd2_chk_g
 
-                JMP     L9132
+                JMP     cmd2_plonkp
 
-.L90BF          CMP     #$47
-                BNE     L90C6
+.cmd2_chk_g     CMP     #$47
+                BNE     cmd2_chk_hash
 
-                JMP     L9138
+                JMP     cmd2_plonkg
 
-.L90C6          CMP     #$23
-                BNE     L90CD
+.cmd2_chk_hash  CMP     #$23
+                BNE     cmd2_chk_dash
 
-                JMP     L913E
+                JMP     cmd2_plonk#
 
-.L90CD          CMP     #$2D
-                BNE     L90D4
+.cmd2_chk_dash  CMP     #$2D
+                BNE     cmd2_chk_q
 
-                JMP     L914A
+                JMP     cmd2_plonk-
 
-.L90D4          CMP     #$3F
-                BNE     L90DB
+.cmd2_chk_q     CMP     #$3F
+                BNE     cmd2_fallback
 
-                JMP     L9144
+                JMP     cmd2_plonk?
 
-.L90DB          JMP     L850E
+.cmd2_fallback  JMP     basic_data_850e
 
-.L90DE          JSR     PLONKON
-
-                JMP     command_done_2
-
-.L90E4          JSR     PLONKOFF
+.cmd2_plonkon   JSR     PLONKON
 
                 JMP     command_done_2
 
-.L90EA          JSR     PLONKW
+.cmd2_plonkoff  JSR     PLONKOFF
 
                 JMP     command_done_2
 
-.L90F0          JSR     LA07A
+.cmd2_plonkw    JSR     PLONKW
 
                 JMP     command_done_2
 
-.L90F6          JSR     LA4C7
+.cmd2_plonkx    JSR     plonkx_hnd
 
                 JMP     command_done_2
 
-.L90FC          JSR     LA519
+.cmd2_plonks    JSR     plonks_hnd
 
                 JMP     command_done_2
 
-.L9102          JSR     LA6B0
+.cmd2_plonkd    JSR     plonkd_hnd
 
                 JMP     command_done_2
 
-.L9108          JSR     LABA7
+.cmd2_plonkt    JSR     plonkt_hnd
 
                 JMP     command_done_2
 
-.L910E          JSR     L8900
+.cmd2_plonkc    JSR     plonkc_hnd
 
                 JMP     command_done_2
 
-.L9114          JSR     L9E66
+.cmd2_plonk0    JSR     basic_data_8900
 
                 JMP     command_done_2
 
-.L911A          JSR     L9E6C
+.cmd2_plonk8    JSR     plonk8_hnd
 
                 JMP     command_done_2
 
-.L9120          JSR     LA000
+.cmd2_plonk4    JSR     plonk4_hnd
 
                 JMP     command_done_2
 
-.L9126          JSR     L9E00
+.cmd2_plonky    JSR     plonky_hnd
 
                 JMP     command_done_2
 
-.L912C          JSR     L9E9C
+.cmd2_plonkm    JSR     plonkm_hnd
 
                 JMP     command_done_2
 
-.L9132          JSR     L9D4E
+.cmd2_plonk1    JSR     plonk1_hnd
 
                 JMP     command_done_2
 
-.L9138          JSR     L9D00
+.cmd2_plonkp    JSR     plonkp_hnd
 
                 JMP     command_done_2
 
-.L913E          JSR     L9D9D
+.cmd2_plonkg    JSR     plonkg_hnd
 
                 JMP     command_done_2
 
-.L9144          JSR     L9703
+.cmd2_plonk#    JSR     plonk_hash_hnd
 
                 JMP     command_done_2
 
-.L914A          JSR     L8408
+.cmd2_plonk?    JSR     plonk_q_hnd
 
                 JMP     command_done_2
 
-.L9150          CMP     #$09
-                BEQ     L9155
+.cmd2_plonk-    JSR     plonk_dash_hnd
+
+                JMP     command_done_2
+
+.help2_out      CMP     #$09
+                BEQ     help2_save_regs
 
                 RTS
 
-.L9155          TYA
+.help2_save_regsTYA
                 PHA
                 TXA
                 PHA
-.L9159          LDA     (os_text_ptr),Y
+.help2_skip_spacesLDA   (os_text_ptr),Y
                 CMP     #$20
-                BNE     L9163
+                BNE     help2_eol_check
 
                 INY
-                JMP     L9159
+                JMP     help2_skip_spaces
 
-.L9163          CMP     #$0D
-                BNE     L9178
+.help2_eol_checkCMP     #$0D
+                BNE     help2_done
 
                 JSR     OSNEWL
 
                 LDX     #$00
-.L916C          LDA     L917F,X
-                BEQ     L9178
+.help2_print_loopLDA    help2_banner,X
+                BEQ     help2_done
 
                 JSR     OSWRCH
 
                 INX
-                JMP     L916C
+                JMP     help2_print_loop
 
-.L9178          PLA
+.help2_done     PLA
                 TAX
                 PLA
                 TAY
                 LDA     #$09
                 EQUS    "`"
 
-.L917F          EQUS    "MW CONTROL T.C.L ROM Syste"
+.help2_banner   EQUS    "MW CONTROL T.C.L ROM Syste"
 
                 EQUB    $6D,$0A,$0D
 
@@ -2118,7 +2120,7 @@ L8200 = L81FF+1
 
                 EQUB    $0A,$0D,$00,$82
 
-.L91AF          EQUB    $00,$FF,$FF,$0D,$E4,$00,$90,$83
+.plonk_data_91afEQUB    $00,$FF,$FF,$0D,$E4,$00,$90,$83
                 EQUB    $08,$0D,$F6,$0D,$C4,$00,$90,$82
                 EQUB    $D0,$7F,$FE,$2F,$F4,$09,$D0,$8B
                 EQUB    $09,$08,$F6,$05,$7C,$00,$90,$00
@@ -2164,18 +2166,18 @@ L8200 = L81FF+1
                 LDA     #$00
                 RTS
 
-                SBC     L91AF,Y
+                SBC     plonk_data_91af,Y
                 ASL     A
                 BVS     L9248
 
-                BVS     L924F
+                BVS     plonk_data_924f
 
                 BMI     L924D
 
-.L9247          SBC     (L006F),Y
-L9248 = L9247+1
+.plonk_data_9247SBC     (L006F),Y
+L9248 = plonk_data_9247+1
                 SED
-.L924F          SBC     L0019,X
+.plonk_data_924fSBC     L0019,X
                 LDY     #$07
                 SED
                 ASL     A
@@ -2190,8 +2192,8 @@ L9248 = L9247+1
 
                 JSR     LF008
 
-                SBC     LB25F
-                BEQ     L92CC
+                SBC     misc_data_b25f
+                BEQ     plonkon_set_hook
 
                 SBC     L6003,Y
                 BVS     L92C0
@@ -2202,19 +2204,19 @@ L9248 = L9247+1
                 SBC     (L0008),Y
                 BVC     L9284
 
-.L9283          BVS     L928F
+.plonk_data_9283BVS     L928F
 
-L9284 = L9283+1
+L9284 = plonk_data_9283+1
                 JSR     L7025
 
                 SEI
-.L928D          SBC     LF18F,Y
-L928F = L928D+2
+.plonk_data_928dSBC     LF18F,Y
+L928F = plonk_data_928d+2
                 ASL     L0E20
                 LDY     #$0C
-.L9297          BEQ     L9298
+.plonk_data_9297BEQ     L9298
 
-L9298 = L9297+1
+L9298 = plonk_data_9297+1
                 SBC     (L005F),Y
                 SEI
                 ASL     A
@@ -2226,9 +2228,9 @@ L9298 = L9297+1
                 BEQ     L92A4
 
                 LDA     (L00BF),Y
-.L92AF          BEQ     L92EB
+.plonk_data_92afBEQ     plonkon_osword_init
 
-L92B0 = L92AF+1
+L92B0 = plonk_data_92af+1
                 RTI
 
                 BRK
@@ -2238,16 +2240,16 @@ L92B0 = L92AF+1
                 JSR     L20AD
 
 .PLONKON        LDA     EVENTV
-.L92B9          STA     saved_eventv
-L92BA = L92B9+1
+.plonkon_save_eventvSTA saved_eventv
+L92BA = plonkon_save_eventv+1
                 LDA     EVENTV1
-.L92BF          STA     saved_eventv1
-L92C0 = L92BF+1
+.plonkon_save_eventv1STAsaved_eventv1
+L92C0 = plonkon_save_eventv1+1
                 LDA     #$22
                 STA     L0DCF
                 LDA     #$93
                 STA     L0DD0
-.L92CC          LDA     L00F4
+.plonkon_set_hookLDA    L00F4
                 STA     L0DD1
                 LDA     #$00
                 STA     L0080
@@ -2262,7 +2264,7 @@ L92C0 = L92BF+1
                 STA     L0086
                 LDA     #$0C
                 STA     L0087
-.L92EB          LDX     #$1D
+.plonkon_osword_initLDX #$1D
                 LDY     #$93
                 LDA     #$04
                 JSR     OSWORD
@@ -2291,230 +2293,230 @@ L92C0 = L92BF+1
                 TYA
                 PHA
                 LDA     L0073
-                BEQ     L9330
+                BEQ     event_idle_jmp
 
                 INC     L0CF0
-                BEQ     L9333
+                BEQ     event_tick_wrap
 
-.L9330          JMP     L94F4
+.event_idle_jmp JMP     event_main
 
-.L9333          LDA     #$9E
+.event_tick_wrapLDA     #$9E
                 STA     L0CF0
                 LDA     #$6F
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     #$37
-                STA     L0089
+                STA     event_feedback_dst_hi
                 LDA     L0CF1
                 CMP     #$39
-                BEQ     L9356
+                BEQ     event_digit1_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF1
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L93DC
+                JMP     event_gate
 
-.L9356          LDA     #$30
+.event_digit1_wrapLDA   #$30
                 STA     L0CF1
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
                 LDA     #$5F
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     L0CF2
                 CMP     #$35
-                BEQ     L937B
+                BEQ     event_digit2_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF2
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L93DC
+                JMP     event_gate
 
-.L937B          LDA     #$30
+.event_digit2_wrapLDA   #$30
                 STA     L0CF2
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
                 LDA     #$3A
-                STA     L0CE0
+                STA     event_feedback_glyph
                 LDA     #$4F
-                STA     L0088
-                JSR     L9492
+                STA     event_feedback_dst_lo
+                JSR     event_osword_copy
 
                 LDA     #$3F
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     L0CF3
                 CMP     #$39
-                BEQ     L93AC
+                BEQ     event_digit3_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF3
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L93DC
+                JMP     event_gate
 
-.L93AC          LDA     #$30
+.event_digit3_wrapLDA   #$30
                 STA     L0CF3
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
                 LDA     #$2F
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     L0CF4
                 CMP     #$39
-                BEQ     L93D1
+                BEQ     event_digit4_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF4
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L93DC
+                JMP     event_gate
 
-.L93D1          LDA     #$30
+.event_digit4_wrapLDA   #$30
                 STA     L0CF4
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
-.L93DC          LDA     L0CF5
-                BEQ     L93EB
+.event_gate     LDA     L0CF5
+                BEQ     event_digit5_start
 
                 LDA     FRED_F0
                 AND     #$80
-                BNE     L93EB
+                BNE     event_digit5_start
 
-                JMP     L94F4
+                JMP     event_main
 
-.L93EB          LDA     #$EF
-                STA     L0088
+.event_digit5_startLDA  #$EF
+                STA     event_feedback_dst_lo
                 LDA     #$34
-                STA     L0089
+                STA     event_feedback_dst_hi
                 LDA     L0CF6
                 CMP     #$39
-                BEQ     L9409
+                BEQ     event_digit5_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF6
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L94F4
+                JMP     event_main
 
-.L9409          LDA     #$30
+.event_digit5_wrapLDA   #$30
                 STA     L0CF6
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
                 LDA     #$DF
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     L0CF7
                 CMP     #$35
-                BEQ     L942E
+                BEQ     event_digit6_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF7
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L94F4
+                JMP     event_main
 
-.L942E          LDA     #$30
+.event_digit6_wrapLDA   #$30
                 STA     L0CF7
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
                 LDA     #$3A
-                STA     L0CE0
+                STA     event_feedback_glyph
                 LDA     #$CF
-                STA     L0088
-                JSR     L9492
+                STA     event_feedback_dst_lo
+                JSR     event_osword_copy
 
                 LDA     #$BF
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     L0CF8
                 CMP     #$39
-                BEQ     L945F
+                BEQ     event_digit7_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF8
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L94F4
+                JMP     event_main
 
-.L945F          LDA     #$30
+.event_digit7_wrapLDA   #$30
                 STA     L0CF8
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
                 LDA     #$AF
-                STA     L0088
+                STA     event_feedback_dst_lo
                 LDA     L0CF9
                 CMP     #$39
-                BEQ     L9484
+                BEQ     event_digit8_wrap
 
                 CLC
                 ADC     #$01
-                STA     L0CE0
+                STA     event_feedback_glyph
                 STA     L0CF9
-                JSR     L9492
+                JSR     event_osword_copy
 
-                JMP     L94F4
+                JMP     event_main
 
-.L9484          LDA     #$30
+.event_digit8_wrapLDA   #$30
                 STA     L0CF9
-                STA     L0CE0
-                JSR     L9492
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
-                JMP     L94F4
+                JMP     event_main
 
-.L9492          LDX     #$E0
+.event_osword_copyLDX   #$E0
                 LDY     #$0C
                 LDA     #$0A
                 SEI
                 JSR     OSWORD
 
                 LDY     #$01
-.L949E          LDA     (L0086),Y
+.event_copy_hi_loopLDA  (L0086),Y
                 AND     #$F0
                 EOR     #$FF
-                STA     (L0088),Y
+                STA     (event_feedback_dst_lo),Y
                 INY
                 CPY     #$09
-                BNE     L949E
+                BNE     event_copy_hi_loop
 
                 LDY     #$01
-                LDA     L0088
+                LDA     event_feedback_dst_lo
                 CLC
                 ADC     #$08
-                STA     L0088
-.L94B4          LDA     (L0086),Y
+                STA     event_feedback_dst_lo
+.event_copy_lo_loopLDA  (L0086),Y
                 ASL     A
                 ASL     A
                 ASL     A
                 ASL     A
                 AND     #$F0
                 EOR     #$FF
-                STA     (L0088),Y
+                STA     (event_feedback_dst_lo),Y
                 INY
                 CPY     #$09
-                BNE     L94B4
+                BNE     event_copy_lo_loop
 
                 CLI
                 RTS
 
-.L94C7          JSR     L9F02
+.event_exit     JSR     event_tick
 
                 LDX     #$1D
                 LDY     #$93
@@ -2527,20 +2529,20 @@ L92C0 = L92BF+1
                 PLA
                 RTS
 
-.L94D8          ROR     A
+.nibble_ror4    ROR     A
                 ROR     A
                 ROR     A
                 ROR     A
                 RTS
 
-.L94DD          AND     #$0F
+.nibble_to_asciiAND     #$0F
                 ORA     #$30
                 CMP     #$3A
-                BCC     L94E8
+                BCC     nibble_to_ascii_ret
 
                 CLC
                 ADC     #$06
-.L94E8          RTS
+.nibble_to_ascii_retRTS
 
 .fredf0_1_poll  LDA     #$01
                 BIT     FRED_F0
@@ -2548,10 +2550,10 @@ L92C0 = L92BF+1
 
                 RTS
 
-.L94F1          JMP     (L0082)
+.event_dispatch_indirectJMP(L0082)
 
-.L94F4          LDA     L0065
-                BEQ     L94C7
+.event_main     LDA     L0065
+                BEQ     event_exit
 
                 LDY     L0080
                 JSR     fredf0_1_poll
@@ -2560,10 +2562,10 @@ L92C0 = L92BF+1
                 STA     FRED_80
                 INY
                 LDX     fred80_table,Y
-                STX     L0088
+                STX     event_feedback_dst_lo
                 INY
                 LDX     fred80_table,Y
-                STX     L0089
+                STX     event_feedback_dst_hi
                 INY
                 LDA     fred80_table,Y
                 STA     L0082
@@ -2573,94 +2575,114 @@ L92C0 = L92BF+1
                 INY
                 LDA     fred80_table,Y
                 CMP     #$FF
-                BNE     L9527
+                BNE     event_main_poll
 
                 LDY     #$00
-                STY     L0084
-.L9527          JSR     fredf0_1_poll
+                STY     event_feedback_index
+.event_main_pollJSR     fredf0_1_poll
 
                 JSR     fredf0_1_poll
 
                 LDA     FRED_F1
-                JSR     L94F1
+                JSR     event_dispatch_indirect
 
                 STY     L0080
-                JMP     L94C7
+                JMP     event_exit
 
-                EOR     #$D4
-                STA     L0002,X
-                EOR     #$6B
-                STA     L0001,X
-                EOR     #$6B
-                STA     L0000,X
-                EOR     #$6B
-                STA     L0007,X
-                LSR     A
-                STA     L0006,X
-                LSR     A
-                STA     L0005,X
-                LSR     A
-                STA     L0004,X
-                LSR     A
-                STA     L000D,X
-                LSR     A
-                LDY     L0095
-                LSR     A
-                LDY     L0095
-                PHA
-                JSR     L94D8
+.fred80_table   EQUB    $03,$5F,$49,$D4,$95,$02,$6F,$49
+                EQUB    $6B,$95,$01,$8F,$49,$6B,$95,$00
+                EQUB    $AF,$49,$6B,$95,$07,$0F,$4A,$D4
+                EQUB    $95,$06,$1F,$4A,$6B,$95,$05,$3F
+                EQUB    $4A,$6B,$95,$04,$5F,$4A,$6B,$95
+                EQUB    $0D,$BF,$4A,$A4,$95,$0C,$DF,$4A
+                EQUB    $A4,$95,$FF
 
-                JSR     L94DD
+.event_cb_store_pairPHA
+                JSR     nibble_ror4
 
-                STY     L0CEF
-                LDY     L0084
-                STA     L0C9E,Y
-                LDA     L0CBD,Y
-                STA     L0CE0
-                JSR     L9492
+                JSR     nibble_to_ascii
 
-                LDA     L0088
+                STY     event_feedback_saved_y
+                LDY     event_feedback_index
+                STA     event_feedback_buf,Y
+                LDA     event_feedback_glyph_lut,Y
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
+
+                LDA     event_feedback_dst_lo
                 CLC
                 ADC     #$08
-                STA     L0088
-                INC     L0084
+                STA     event_feedback_dst_lo
+                INC     event_feedback_index
                 PLA
-                JSR     L94DD
+                JSR     nibble_to_ascii
 
-                LDY     L0084
-                STA     L0C9E,Y
-                LDA     L0CBD,Y
-                STA     L0CE0
-                JSR     L9492
+                LDY     event_feedback_index
+                STA     event_feedback_buf,Y
+                LDA     event_feedback_glyph_lut,Y
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
-                LDY     L0CEF
-                INC     L0084
+                LDY     event_feedback_saved_y
+                INC     event_feedback_index
                 RTS
 
-                PHA
-                JSR     L94D8
+.event_cb_draw_pairPHA
+                JSR     nibble_ror4
 
-                JSR     L94DD
+                JSR     nibble_to_ascii
 
-                STY     L0CEF
-                STA     L0CE0
-                JSR     L9492
+                STY     event_feedback_saved_y
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
 
-                LDA     L0088
+                LDA     event_feedback_dst_lo
                 CLC
                 ADC     #$08
-                EQUB    $08,$85,$88,$68,$20,$DD,$94,$8D
-                EQUB    $E0,$0C,$A5,$88,$C9,$DE,$30,$05
-                EQUB    $A9,$30,$8D,$E0,$0C,$20,$92,$94
-                EQUB    $AC,$EF,$0C,$60,$C9,$00,$F0,$04
-                EQUB    $A9,$2D,$D0,$02,$A9,$2B,$8C,$EF
-                EQUB    $0C,$A4,$84,$C8,$99,$9E,$0C,$B9
-                EQUB    $BD,$0C,$8D,$E0,$0C,$20,$92,$94
-                EQUB    $A4,$84,$A9,$0D,$99,$9E,$0C,$E6
-                EQUB    $84,$E6,$84,$AC,$EF,$0C,$60,$AC
-                EQUB    $EF,$0C,$60,$94,$0F
+                STA     event_feedback_dst_lo
+                PLA
+                JSR     nibble_to_ascii
 
-.L9605          EQUB    $80,$00,$F3,$EF,$F6,$3F,$7F,$2F
+                STA     event_feedback_glyph
+                LDA     event_feedback_dst_lo
+                CMP     #$DE
+                BMI     event_cb_draw_pair_clamp
+
+                LDA     #$30
+                STA     event_feedback_glyph
+.event_cb_draw_pair_clampJSRevent_osword_copy
+
+                LDY     event_feedback_saved_y
+                RTS
+
+.event_cb_store_signCMP #$00
+                BEQ     event_cb_store_sign_zero
+
+                LDA     #$2D
+                BNE     event_cb_store_sign_emit
+
+.event_cb_store_sign_zeroLDA#$2B
+.event_cb_store_sign_emitSTYevent_feedback_saved_y
+                LDY     event_feedback_index
+                INY
+                STA     event_feedback_buf,Y
+                LDA     event_feedback_glyph_lut,Y
+                STA     event_feedback_glyph
+                JSR     event_osword_copy
+
+                LDY     event_feedback_index
+                LDA     #$0D
+                STA     event_feedback_buf,Y
+                INC     event_feedback_index
+                INC     event_feedback_index
+                LDY     event_feedback_saved_y
+                RTS
+
+                LDY     event_feedback_saved_y
+                RTS
+
+                STY     L000F,X
+.plonk_data_9605EQUB    $80,$00,$F3,$EF,$F6,$3F,$7F,$2F
                 EQUB    $FC,$0B,$B2,$0B,$10,$0E,$FA,$0B
                 EQUB    $C8,$06,$80,$0F,$F0,$BF,$FD,$0F
                 EQUB    $FA,$4F,$BB,$8F,$02,$0C,$E2,$0F
@@ -2695,286 +2717,286 @@ L92C0 = L92BF+1
                 EQUB    $6D,$F7,$1F,$FB,$4F,$FB,$8F,$B1
                 EQUB    $A9,$00,$60
 
-.L9703          LDA     #$13
+.plonk_q_hnd    LDA     #$13
                 JSR     OSBYTE
 
                 LDA     #$C0
                 STA     LFE6E
                 LDA     L09B4
                 CMP     #$63
-                BNE     L971A
+                BNE     help_sel_02
 
-                JSR     L98B5
+                JSR     set_help_9c75
 
-                JMP     L97BD
+                JMP     help_sel_done
 
-.L971A          CMP     #$02
-                BNE     L9724
+.help_sel_02    CMP     #$02
+                BNE     help_sel_l09b8
 
-                JSR     L9847
+                JSR     set_help_9b4e
 
-                JMP     L97BD
+                JMP     help_sel_done
 
-.L9724          LDA     L09B8
+.help_sel_l09b8 LDA     L09B8
                 CMP     #$00
-                BNE     L972E
+                BNE     help_sel_l09b8_eq01
 
-                JSR     L97C3
+                JSR     set_help_98db
 
-.L972E          CMP     #$01
-                BNE     L9735
+.help_sel_l09b8_eq01CMP #$01
+                BNE     help_sel_l09b8_eq02
 
-                JSR     L97CE
+                JSR     set_help_98ee
 
-.L9735          CMP     #$02
-                BNE     L973C
+.help_sel_l09b8_eq02CMP #$02
+                BNE     help_sel_l09b8_eq03
 
-                JSR     L97D9
+                JSR     set_help_990f
 
-.L973C          CMP     #$03
-                BNE     L9743
+.help_sel_l09b8_eq03CMP #$03
+                BNE     help_sel_l09b8_eq46
 
-                JSR     L97E4
+                JSR     set_help_9950
 
-.L9743          CMP     #$46
-                BNE     L974A
+.help_sel_l09b8_eq46CMP #$46
+                BNE     help_sel_l09b8_eq47
 
-                JSR     L97EF
+                JSR     set_help_9992
 
-.L974A          CMP     #$47
-                BNE     L9751
+.help_sel_l09b8_eq47CMP #$47
+                BNE     help_sel_l09b8_eq51
 
-                JSR     L97FA
+                JSR     set_help_99ae
 
-.L9751          CMP     #$51
-                BNE     L9758
+.help_sel_l09b8_eq51CMP #$51
+                BNE     help_sel_l09b8_eq52
 
-                JSR     L9805
+                JSR     set_help_99c8
 
-.L9758          CMP     #$52
-                BNE     L975F
+.help_sel_l09b8_eq52CMP #$52
+                BNE     help_sel_l09b8_eq53
 
-                JSR     L9810
+                JSR     set_help_9a11
 
-.L975F          CMP     #$53
-                BNE     L9766
+.help_sel_l09b8_eq53CMP #$53
+                BNE     help_sel_l09b8_eq54
 
-                JSR     L981B
+                JSR     set_help_9a56
 
-.L9766          CMP     #$54
-                BNE     L976D
+.help_sel_l09b8_eq54CMP #$54
+                BNE     help_sel_l09b8_eq5a
 
-                JSR     L9826
+                JSR     set_help_9a9a
 
-.L976D          CMP     #$5A
-                BNE     L9774
+.help_sel_l09b8_eq5aCMP #$5A
+                BNE     help_sel_l09b8_eq5b
 
-                JSR     L9831
+                JSR     set_help_9b07
 
-.L9774          CMP     #$5B
-                BNE     L977B
+.help_sel_l09b8_eq5bCMP #$5B
+                BNE     help_sel_l09b4
 
-                JSR     L983C
+                JSR     set_help_9b29
 
-.L977B          LDA     L09B4
+.help_sel_l09b4 LDA     L09B4
                 CMP     #$03
-                BNE     L9785
+                BNE     help_sel_l09b4_eq04
 
-                JSR     L9852
+                JSR     set_help_9b61
 
-.L9785          CMP     #$04
-                BNE     L978C
+.help_sel_l09b4_eq04CMP #$04
+                BNE     help_sel_l09b4_eq05
 
-                JSR     L985D
+                JSR     set_help_9b89
 
-.L978C          CMP     #$05
-.L978E          BNE     L9793
+.help_sel_l09b4_eq05CMP #$05
+.help_sel_l09b4_eq05_bneBNEhelp_sel_l09b4_eq06
 
-L978F = L978E+1
-                JSR     L9868
+L978F = help_sel_l09b4_eq05_bne+1
+                JSR     set_help_9bb1
 
-.L9793          CMP     #$06
-                BNE     L979A
+.help_sel_l09b4_eq06CMP #$06
+                BNE     help_sel_l09b4_eq08
 
-                JSR     L9873
+                JSR     set_help_9bc2
 
-.L979A          CMP     #$08
-                BNE     L97A1
+.help_sel_l09b4_eq08CMP #$08
+                BNE     help_sel_l09b4_eq09
 
-                JSR     L987E
+                JSR     set_help_9c0f
 
-.L97A1          CMP     #$09
-                BNE     L97A8
+.help_sel_l09b4_eq09CMP #$09
+                BNE     help_sel_l09b4_eq0a
 
-                JSR     L9889
+                JSR     set_help_9c1e
 
-.L97A8          CMP     #$0A
-                BNE     L97AF
+.help_sel_l09b4_eq0aCMP #$0A
+                BNE     help_sel_l09b4_eq27
 
-                JSR     L9894
+                JSR     set_help_9c2e
 
-.L97AF          CMP     #$27
-                BNE     L97B6
+.help_sel_l09b4_eq27CMP #$27
+                BNE     help_sel_l09b4_eq28
 
-                JSR     L989F
+                JSR     set_help_9c4e
 
-.L97B6          CMP     #$28
-                BNE     L97BD
+.help_sel_l09b4_eq28CMP #$28
+                BNE     help_sel_done
 
-                JSR     L98AA
+                JSR     set_help_9c62
 
-.L97BD          LDA     #$C0
+.help_sel_done  LDA     #$C0
                 STA     LFE6E
                 RTS
 
-.L97C3          LDA     #$DB
+.set_help_98db  LDA     #$DB
                 STA     L006C
                 LDA     #$98
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L97CE          LDA     #$EE
+.set_help_98ee  LDA     #$EE
                 STA     L006C
                 LDA     #$98
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L97D9          LDA     #$0F
+.set_help_990f  LDA     #$0F
                 STA     L006C
                 LDA     #$99
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L97E4          LDA     #$50
+.set_help_9950  LDA     #$50
                 STA     L006C
                 LDA     #$99
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L97EF          LDA     #$92
+.set_help_9992  LDA     #$92
                 STA     L006C
                 LDA     #$99
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L97FA          LDA     #$AE
+.set_help_99ae  LDA     #$AE
                 STA     L006C
                 LDA     #$99
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9805          LDA     #$C8
+.set_help_99c8  LDA     #$C8
                 STA     L006C
                 LDA     #$99
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9810          LDA     #$11
+.set_help_9a11  LDA     #$11
                 STA     L006C
                 LDA     #$9A
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L981B          LDA     #$56
+.set_help_9a56  LDA     #$56
                 STA     L006C
                 LDA     #$9A
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9826          LDA     #$9A
+.set_help_9a9a  LDA     #$9A
                 STA     L006C
                 LDA     #$9A
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9831          LDA     #$07
+.set_help_9b07  LDA     #$07
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L983C          LDA     #$29
+.set_help_9b29  LDA     #$29
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9847          LDA     #$4E
+.set_help_9b4e  LDA     #$4E
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9852          LDA     #$61
+.set_help_9b61  LDA     #$61
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L985D          LDA     #$89
+.set_help_9b89  LDA     #$89
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9868          LDA     #$B1
+.set_help_9bb1  LDA     #$B1
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9873          LDA     #$C2
+.set_help_9bc2  LDA     #$C2
                 STA     L006C
                 LDA     #$9B
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L987E          LDA     #$0F
+.set_help_9c0f  LDA     #$0F
                 STA     L006C
                 LDA     #$9C
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9889          LDA     #$1E
+.set_help_9c1e  LDA     #$1E
                 STA     L006C
                 LDA     #$9C
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L9894          LDA     #$2E
+.set_help_9c2e  LDA     #$2E
                 STA     L006C
                 LDA     #$9C
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L989F          LDA     #$4E
+.set_help_9c4e  LDA     #$4E
                 STA     L006C
                 LDA     #$9C
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L98AA          LDA     #$62
+.set_help_9c62  LDA     #$62
                 STA     L006C
                 LDA     #$9C
                 STA     L006D
-                JMP     L98BD
+                JMP     print_help_ptr
 
-.L98B5          LDA     #$75
+.set_help_9c75  LDA     #$75
                 STA     L006C
                 LDA     #$9C
                 STA     L006D
-.L98BD          LDY     #$00
+.print_help_ptr LDY     #$00
                 PHA
-.L98C0          LDA     (L006C),Y
+.print_help_loopLDA     (L006C),Y
                 CMP     #$40
-                BNE     L98CB
+                BNE     print_help_char
 
                 JSR     OSNEWL
 
                 PLA
                 RTS
 
-.L98CB          JSR     OSWRCH
+.print_help_charJSR     OSWRCH
 
                 TYA
                 PHA
@@ -2984,7 +3006,7 @@ L978F = L978E+1
                 PLA
                 TAY
                 INY
-                JMP     L98C0
+                JMP     print_help_loop
 
                 EQUS    "G00=RAPID MOVEMENT@G01=LINEAR MOVEMENT  F=FEEDRATE @G02=CIRCULAR"
                 EQUS    " INTERPOLATION (CW)-I & K ARE CO-ORDINATES OF CENTRE@G03=CIRCULA"
@@ -3021,221 +3043,127 @@ L978F = L978E+1
                 EQUB    $00,$00,$00,$00,$00,$02,$60,$0F
                 EQUB    $00,$0A,$80,$00,$08
 
-.L9D00          LDA     #$13
+.plonkg_hnd     LDA     #$13
                 JSR     OSBYTE
 
                 LDX     #$00
-                STX     L007B
+                STX     plonk_field_offset
                 LDY     #$00
-                LDA     (L007C),Y
-                STA     L007E
-                JSR     L9D42
+                LDA     (plonk_stream_ptr_lo),Y
+                STA     plonk_field_mask
+                JSR     inc_007c_ptr
 
-.L9D12          ASL     L007E
-                BCC     L9D2A
+.plonkg_loop    ASL     plonk_field_mask
+                BCC     plonkg_store_zero
 
                 LDY     #$00
-                LDA     (L007C),Y
+                LDA     (plonk_stream_ptr_lo),Y
                 TAX
-                JSR     L9D42
+                JSR     inc_007c_ptr
 
                 LDY     #$00
-                LDA     (L007C),Y
+                LDA     (plonk_stream_ptr_lo),Y
                 TAY
-                JSR     L9D42
+                JSR     inc_007c_ptr
 
                 TYA
-                JMP     L9D2E
+                JMP     plonkg_store_pair
 
-.L9D2A          LDA     #$00
+.plonkg_store_zeroLDA   #$00
                 LDX     #$00
-.L9D2E          LDY     L007B
+.plonkg_store_pairLDY   plonk_field_offset
                 PHA
                 TXA
-                STA     L0950,Y
+                STA     plonkg_field_table,Y
                 PLA
                 INY
-                STA     L0950,Y
+                STA     plonkg_field_table,Y
                 INY
-                STY     L007B
+                STY     plonk_field_offset
                 CPY     #$0F
-                BMI     L9D12
+                BMI     plonkg_loop
 
                 RTS
 
-.L9D42          CLC
-                LDA     L007C
+.inc_007c_ptr   CLC
+                LDA     plonk_stream_ptr_lo
                 ADC     #$01
-                STA     L007C
-                BCC     L9D4D
+                STA     plonk_stream_ptr_lo
+                BCC     inc_007c_ptr_ret
 
-                INC     L007D
-.L9D4D          RTS
+                INC     plonk_stream_ptr_hi
+.inc_007c_ptr_retRTS
 
-.L9D4E          LDA     #$13
-.L9D50          JSR     OSBYTE
-
-L9D52 = L9D50+2
-                LDX     #$00
-                STX     L007B
-                STX     L007E
-                STX     L007F
-                LDX     L007C
-                STX     L0079
-                LDX     L007D
-                STX     L007A
-                JSR     L9D42
-
-.L9D66          LDY     L007B
-                LDA     L0950,Y
-                INY
-                LDX     L0950,Y
-                INY
-                STY     L007B
-                CMP     L007F
-                BNE     L9D80
-
-                CPX     L007F
-                BNE     L9D80
-
-                CLC
-                ROL     L007E
-                JMP     L9D90
-
-.L9D80          SEC
-                ROL     L007E
-                LDY     #$00
-                STA     (L007C),Y
-                JSR     L9D42
-
-                TXA
-                STA     (L007C),Y
-                JSR     L9D42
-
-.L9D90          LDA     L007B
-                CMP     #$0F
-                BMI     L9D66
-
-                LDY     #$00
-                LDA     L007E
-                STA     (L0079),Y
-                RTS
-
-.L9D9D          LDA     #$13
+.plonkp_hnd     LDA     #$13
                 JSR     OSBYTE
 
-                LDX     L007C
-                LDY     L0070
-                STX     L0070
-                STY     L007C
-                LDX     L007D
-                LDY     L0071
-                STX     L0071
-                STY     L007D
+                LDX     #$00
+                STX     plonk_field_offset
+                STX     plonk_field_mask
+                STX     plonk_zero_word
+                LDX     plonk_stream_ptr_lo
+                STX     plonk_pack_save_ptr_lo
+                LDX     plonk_stream_ptr_hi
+                STX     plonk_pack_save_ptr_hi
+                JSR     inc_007c_ptr
+
+.plonkp_loop    LDY     plonk_field_offset
+                LDA     plonkg_field_table,Y
+                INY
+                LDX     plonkg_field_table,Y
+                INY
+                STY     plonk_field_offset
+                CMP     plonk_zero_word
+                BNE     plonkp_store_pair
+
+                CPX     plonk_zero_word
+                BNE     plonkp_store_pair
+
+                CLC
+                ROL     plonk_field_mask
+                JMP     plonkp_next_pair
+
+.plonkp_store_pairSEC
+                ROL     plonk_field_mask
+                LDY     #$00
+                STA     (plonk_stream_ptr_lo),Y
+                JSR     inc_007c_ptr
+
+                TXA
+                STA     (plonk_stream_ptr_lo),Y
+                JSR     inc_007c_ptr
+
+.plonkp_next_pairLDA    plonk_field_offset
+                CMP     #$0F
+                BMI     plonkp_loop
+
+                LDY     #$00
+                LDA     plonk_field_mask
+                STA     (plonk_pack_save_ptr_lo),Y
                 RTS
 
-                BRK
-                EQUB    $20
+.plonk_hash_hnd LDA     #$13
+                JSR     OSBYTE
 
-                BRK
-                EQUB    $01
+                LDX     plonk_stream_ptr_lo
+                LDY     plonk_alt_ptr_lo
+                STX     plonk_alt_ptr_lo
+                STY     plonk_stream_ptr_lo
+                LDX     plonk_stream_ptr_hi
+                LDY     plonk_alt_ptr_hi
+                STX     plonk_alt_ptr_hi
+                EQUB    $84,$7D,$60,$00,$20,$80,$00,$01
+                EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+                EQUB    $10,$90,$00,$00,$00,$88,$00,$00
+                EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+                EQUB    $80,$22,$08,$00,$08,$42,$0A,$00
+                EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+                EQUB    $00,$00,$08,$08,$20,$41,$01,$01
+                EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+                EQUB    $00,$00,$08,$40,$40,$80,$08,$00
+                EQUB    $01,$00,$08,$00,$00,$00,$00,$00
 
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BPL     L9D52
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $88
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                PHP
-                BRK
-                EQUB    $08
-
-                ASL     A
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $08
-
-                PHP
-                JSR     L0141
-
-                ORA     (L0000,X)
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $08
-
-                RTI
-
-                RTI
-
-                PHP
-                BRK
-                EQUB    $01
-
-                BRK
-                EQUB    $08
-
-                BRK
-                EQUB    $00
-
-                BRK
-                EQUB    $00
-
-                BRK
-.L9E00          NOP
+.plonkm_hnd     NOP
                 NOP
                 NOP
                 LDA     IRQ1V
@@ -3276,27 +3204,27 @@ L9D52 = L9D50+2
                 EOR     #$40
                 RTS
 
-.L9E54          LDA     #$11
+.set_src_0b11   LDA     #$11
                 STA     L0064
                 LDA     #$0B
                 STA     L0065
                 RTS
 
-.L9E5D          LDA     #$B1
+.set_src_0bb1   LDA     #$B1
                 STA     L0064
                 LDA     #$0B
                 STA     L0065
                 RTS
 
-.L9E66          JSR     L9E54
+.plonk8_hnd     JSR     set_src_0b11
 
-                JMP     L9E72
+                JMP     copy_src_to_workbuf
 
-.L9E6C          JSR     L9E5D
+.plonk4_hnd     JSR     set_src_0bb1
 
-                JMP     L9E72
+                JMP     copy_src_to_workbuf
 
-.L9E72          LDY     #$10
+.copy_src_to_workbufLDY #$10
                 LDA     (L0064),Y
                 STA     L0248
                 INY
@@ -3304,25 +3232,25 @@ L9D52 = L9D50+2
                 STA     L0249
                 INY
                 LDX     #$00
-.L9E82          LDA     (L0064),Y
+.copy_src_vec_loopLDA   (L0064),Y
                 STA     L00D0,X
                 INY
                 INX
                 CPX     #$0A
-                BNE     L9E82
+                BNE     copy_src_vec_loop
 
                 LDY     #$20
                 LDX     #$00
-.L9E90          LDA     (L0064),Y
+.copy_src_block_loopLDA (L0064),Y
                 STA     L0300,X
                 INY
                 INX
                 CPX     #$80
-                BNE     L9E90
+                BNE     copy_src_block_loop
 
                 RTS
 
-.L9E9C          SEI
+.plonk1_hnd     SEI
                 LDA     L0060
                 STA     IRQ1V
                 LDA     L0061
@@ -3355,7 +3283,7 @@ L9D52 = L9D50+2
                 ROL     L0BC1
                 LDA     L0248
                 ROR     A
-                JSR     L9EE8
+                JSR     event_hw_write
 
                 PLA
                 TAX
@@ -3363,52 +3291,52 @@ L9D52 = L9D50+2
                 PLP
                 JMP     (L0062)
 
-.L9EE8          LDA     L0B21
+.event_hw_write LDA     L0B21
                 STA     LFE20
                 LDA     #$C0
                 STA     LFE6E
                 LDX     #$0F
-.L9EF5          LDA     L0B11,X
+.event_hw_write_loopLDA L0B11,X
                 STA     LFE21
                 DEX
-                BPL     L9EF5
+                BPL     event_hw_write_loop
 
-                JSR     L9F02
+                JSR     event_tick
 
                 RTS
 
-.L9F02          LDA     L0073
-                BNE     L9F07
+.event_tick     LDA     L0073
+                BNE     event_tick_advance
 
-.L9F06          RTS
+.event_tick_ret RTS
 
-.L9F07          INC     L0C90
-                BNE     L9F06
+.event_tick_advanceINC  L0C90
+                BNE     event_tick_ret
 
                 LDA     L0C92
                 STA     L0C90
                 LDA     L0C91
-                BNE     L9F1A
+                BNE     event_tick_flip
 
-                JMP     L9F30
+                JMP     event_tick_push_f0
 
-.L9F1A          LDA     L0C93
-                BEQ     L9F27
+.event_tick_flipLDA     L0C93
+                BEQ     event_tick_flip_set
 
                 LDA     #$00
                 STA     L0C93
-                JMP     L9F30
+                JMP     event_tick_push_f0
 
-.L9F27          INC     L0C93
+.event_tick_flip_setINC L0C93
                 LDA     #$00
                 PHA
-                JMP     L9F33
+                JMP     event_tick_fanout
 
-.L9F30          LDA     #$F0
+.event_tick_push_f0LDA  #$F0
                 PHA
-.L9F33          LDY     #$00
+.event_tick_fanoutLDY   #$00
                 LDX     #$00
-.L9F37          LDA     L08C0,X
+.event_tick_fanout_loopLDAL08C0,X
                 STA     L0074
                 INX
                 LDA     L08C0,X
@@ -3418,7 +3346,7 @@ L9D52 = L9D50+2
                 PHA
                 STA     (L0074),Y
                 CPX     #$18
-                BNE     L9F37
+                BNE     event_tick_fanout_loop
 
                 PLA
                 RTS
@@ -3427,14 +3355,14 @@ L9D52 = L9D50+2
                 LDA     #$C8
                 JSR     OSBYTE
 
-.L9F54          LDA     #$6F
-L9F55 = L9F54+1
+.event_wait_6f  LDA     #$6F
+L9F55 = event_wait_6f+1
                 STA     L1202
                 JSR     L1910
 
                 LDA     L1202
                 CMP     #$7B
-.L9F61          BNE     L9F61
+.event_wait_6f_spinBNE  event_wait_6f_spin
 
                 RTS
 
@@ -3465,13 +3393,13 @@ L9F55 = L9F54+1
                 LDA     L001F,X
                 BEQ     L9FC8
 
-                BPL     L9F99
+                BPL     event_data_9f99
 
-.L9F8F          BNE     L9FB8
+.event_data_9f8fBNE     event_data_9fb8
 
-L9F90 = L9F8F+1
+L9F90 = event_data_9f8f+1
                 SED
-.L9F99          BVC     L9FAA
+.event_data_9f99BVC     event_data_9faa
 
                 SED
                 BRK
@@ -3481,13 +3409,13 @@ L9F90 = L9F8F+1
                 INC     LFE5F,X
                 ROL     L8FFA
                 LDA     L20C6,X
-.L9FAA          ASL     L03F0
+.event_data_9faaASL     L03F0
                 BVC     L9FB7
 
                 INC     LFA4F,X
-.L9FB5          INC     L978F,X
-L9FB7 = L9FB5+2
-.L9FB8          ASL     L0600
+.event_data_9fb5INC     L978F,X
+L9FB7 = event_data_9fb5+2
+.event_data_9fb8ASL     L0600
                 BEQ     L9FC8
 
                 RTI
@@ -3496,8 +3424,8 @@ L9FB7 = L9FB5+2
                 BCS     L9F90
 
                 INC     LFF3F,X
-.L9FC6          ASL     L839B
-L9FC8 = L9FC6+2
+.event_data_9fc6ASL     plonk_abef_copy_loop
+L9FC8 = event_data_9fc6+2
                 RTI
 
                 STX     L1F70
@@ -3505,7 +3433,7 @@ L9FC8 = L9FC6+2
 
                 INC     L006F,X
                 INC     FRED_4F,X
-                LSR     LAFB9
+                LSR     misc_data_afb9
                 RTI
 
                 SBC     #$45
@@ -3527,14 +3455,14 @@ L9FC8 = L9FC6+2
                 SBC     (L005F),Y
                 SEI
                 TXA
-.LA000          LDA     L0993
+.plonky_hnd     LDA     L0993
                 AND     #$F8
                 LSR     A
                 LSR     A
                 LSR     A
                 ASL     A
                 TAX
-                LDA     LA03A,X
+                LDA     a0_tbl,X
                 STA     L0092
                 LDA     LA03B,X
                 STA     L0093
@@ -3558,10 +3486,10 @@ L9FC8 = L9FC6+2
                 STA     L0093
                 RTS
 
-.LA03A          BMI     LA06C
+.a0_tbl         BMI     a0_tbl_tail_6c
 
-LA03B = LA03A+1
-                BCS     LA070
+LA03B = a0_tbl+1
+                BCS     a0_tbl_tail_70
 
                 BMI     LA075
 
@@ -3577,253 +3505,253 @@ LA03B = LA03A+1
 
                 BMI     LA090
 
-                BCS     LA094
+                BCS     a0_shift_lo1
 
-                BMI     LA099
+                BMI     a0_shift_lo2
 
                 BCS     LA09D
 
-                BMI     LA0A2
+                BMI     a0_clamp_x_cmp
 
-                BCS     LA0A6
+                BCS     a0_clamp_x_set
 
-                BMI     LA0AB
+                BMI     a0_clamp_z_cmp
 
-                BCS     LA0AF
+                BCS     a0_clamp_z_setcmp
 
                 BMI     LA0B4
 
-                BCS     LA0B8
+                BCS     a0_phase_mode_cmp
 
-                BMI     LA0BD
+                BMI     a0_phase_mode2
 
                 BCS     LA0C1
 
                 BMI     LA0C6
 
-                BCS     LA0CA
+                BCS     a0_eval
 
-                BMI     LA0CF
+                BMI     a0_eval_store
 
-                BCS     LA0D3
+                BCS     a0_eval_cmp
 
-                BMI     LA0D8
+                BMI     a0_eval_ge
 
-.LA06C          BCS     LA0DC
+.a0_tbl_tail_6c BCS     a0_eval_phase
 
                 BMI     LA0E1
 
-.LA070          BCS     LA0E5
+.a0_tbl_tail_70 BCS     a0_eval_phase_dec
 
                 BMI     LA0EA
 
-.LA074          BCS     LA0EE
+.a0_tbl_tail_74 BCS     LA0EE
 
-LA075 = LA074+1
-                BMI     LA0F3
+LA075 = a0_tbl_tail_74+1
+                BMI     a0_eval_dec_fine
 
-.LA078          BCS     LA0F7
+.a0_tbl_tail_78 BCS     LA0F7
 
-LA079 = LA078+1
-.LA07A          JSR     LA50C
+LA079 = a0_tbl_tail_78+1
+.plonkx_hnd     JSR     a_scan_init
 
-.LA07D          INC     L09FA
-LA07E = LA07D+1
-.LA080          JSR     LA50C
+.a0_preload_inc INC     L09FA
+LA07E = a0_preload_inc+1
+.a0_preload_scanJSR     a_scan_init
 
-LA082 = LA080+2
+LA082 = a0_preload_scan+2
                 DEC     L09FA
-.LA086          LDA     L09B3
-LA087 = LA086+1
+.a0_shift_hi    LDA     L09B3
+LA087 = a0_shift_hi+1
                 LSR     A
-.LA08A          ROR     L09B2
-LA08B = LA08A+1
+.a0_shift_mid1  ROR     L09B2
+LA08B = a0_shift_mid1+1
                 LSR     A
-.LA08E          ROR     L09B2
-LA090 = LA08E+2
+.a0_shift_mid2  ROR     L09B2
+LA090 = a0_shift_mid2+2
                 LDA     L09B1
-.LA094          LSR     A
+.a0_shift_lo1   LSR     A
                 ROR     L09B0
                 LSR     A
-.LA099          ROR     L09B0
-.LA09C          LDA     #$EC
-LA09D = LA09C+1
+.a0_shift_lo2   ROR     L09B0
+.a0_clamp_x_in  LDA     #$EC
+LA09D = a0_clamp_x_in+1
                 CLC
                 CMP     L09B0
-.LA0A2          BCS     LA0A9
+.a0_clamp_x_cmp BCS     a0_clamp_z_in
 
                 LDA     #$EC
-.LA0A6          STA     L09B0
-.LA0A9          LDA     #$92
-.LA0AB          CLC
+.a0_clamp_x_set STA     L09B0
+.a0_clamp_z_in  LDA     #$92
+.a0_clamp_z_cmp CLC
                 CMP     L09B2
-.LA0AF          BCS     LA0B6
+.a0_clamp_z_setcmpBCS   a0_phase_mode
 
                 LDA     #$92
-.LA0B3          STA     L09B2
-LA0B4 = LA0B3+1
-.LA0B6          LDA     #$02
-.LA0B8          CMP     L0912
-                BNE     LA0C0
+.a0_clamp_z_set STA     L09B2
+LA0B4 = a0_clamp_z_set+1
+.a0_phase_mode  LDA     #$02
+.a0_phase_mode_cmpCMP   L0912
+                BNE     a0_gate_l09fb
 
-.LA0BD          JMP     LA105
+.a0_phase_mode2 JMP     a0_mode2
 
-.LA0C0          LDA     #$00
-LA0C1 = LA0C0+1
+.a0_gate_l09fb  LDA     #$00
+LA0C1 = a0_gate_l09fb+1
                 CMP     L09FB
-.LA0C5          BEQ     LA0CA
+.a0_gate_l09fb_cmpBEQ   a0_eval
 
-LA0C6 = LA0C5+1
-                JMP     LA171
+LA0C6 = a0_gate_l09fb_cmp+1
+                JMP     a0_gate_path
 
-.LA0CA          LDA     L0993
+.a0_eval        LDA     L0993
                 EOR     #$FF
-.LA0CF          STA     L09B4
+.a0_eval_store  STA     L09B4
                 CLC
-.LA0D3          CMP     L09B2
-                BEQ     LA0DC
+.a0_eval_cmp    CMP     L09B2
+                BEQ     a0_eval_phase
 
-.LA0D8          BCS     LA0F9
+.a0_eval_ge     BCS     a0_eval_inc
 
-                BCC     LA0FF
+                BCC     a0_eval_dec
 
-.LA0DC          JSR     LA3F8
+.a0_eval_phase  JSR     a_calc_phase_delta
 
                 CLC
-.LA0E0          CMP     L09B0
-LA0E1 = LA0E0+1
-                BEQ     LA0E9
+.a0_eval_phase_cmpCMP   L09B0
+LA0E1 = a0_eval_phase_cmp+1
+                BEQ     a0_eval_commit
 
-.LA0E5          BCC     LA0ED
+.a0_eval_phase_decBCC   a0_eval_inc_fine
 
-                BCS     LA0F3
+                BCS     a0_eval_dec_fine
 
-.LA0E9          JSR     LA3C7
+.a0_eval_commit JSR     a_move_commit
 
-LA0EA = LA0E9+1
+LA0EA = a0_eval_commit+1
                 RTS
 
-.LA0ED          JSR     LA3B7
+.a0_eval_inc_fineJSR    a_move_inc_fine
 
-LA0EE = LA0ED+1
-                JMP     LA0DC
+LA0EE = a0_eval_inc_fine+1
+                JMP     a0_eval_phase
 
-.LA0F3          JSR     LA3A7
+.a0_eval_dec_fineJSR    a_move_dec_fine
 
-.LA0F6          JMP     LA0DC
+.a0_eval_dec_fine_loopJMPa0_eval_phase
 
-LA0F7 = LA0F6+1
-.LA0F9          JSR     LA397
+LA0F7 = a0_eval_dec_fine_loop+1
+.a0_eval_inc    JSR     a_move_inc
 
-                JMP     LA0CA
+                JMP     a0_eval
 
-.LA0FF          JSR     LA387
+.a0_eval_dec    JSR     a_move_dec
 
-                JMP     LA0CA
+                JMP     a0_eval
 
-.LA105          LDA     L09B0
+.a0_mode2       LDA     L09B0
                 LSR     A
                 STA     L09B8
-.LA10C          LDA     L0993
+.a0_mode2_cmp   LDA     L0993
                 EOR     #$FF
                 CLC
                 CMP     L09B2
-                BEQ     LA11B
+                BEQ     a0_mode2_adjust
 
-                BCS     LA165
+                BCS     a0_mode2_inc
 
-                BCC     LA16B
+                BCC     a0_mode2_dec
 
-.LA11B          LDA     L0961
+.a0_mode2_adjustLDA     L0961
                 CMP     L09B8
-                BEQ     LA0E9
+                BEQ     a0_eval_commit
 
                 CLC
                 ADC     #$01
                 CMP     L09B8
-                BEQ     LA0E9
+                BEQ     a0_eval_commit
 
-                BCC     LA12F
+                BCC     a0_mode2_phase_up
 
-                BCS     LA14A
+                BCS     a0_mode2_phase_down
 
-.LA12F          JSR     LA50C
+.a0_mode2_phase_upJSR   a_scan_init
 
-                JSR     LA486
+                JSR     a_phase_inc
 
-                JSR     LA486
+                JSR     a_phase_inc
 
-                JSR     LA486
+                JSR     a_phase_inc
 
-                JSR     LA486
-
-                INC     L09FA
-                JSR     LA50C
-
-                DEC     L09FA
-                JMP     LA11B
-
-.LA14A          JSR     LA50C
-
-                JSR     LA448
-
-                JSR     LA448
-
-                JSR     LA448
-
-                JSR     LA448
+                JSR     a_phase_inc
 
                 INC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 DEC     L09FA
-                JMP     LA11B
+                JMP     a0_mode2_adjust
 
-.LA165          JSR     LA397
+.a0_mode2_phase_downJSR a_scan_init
 
-                JMP     LA10C
+                JSR     a_phase_dec
 
-.LA16B          JSR     LA387
+                JSR     a_phase_dec
 
-                JMP     LA10C
+                JSR     a_phase_dec
 
-.LA171          JSR     LA3F8
+                JSR     a_phase_dec
+
+                INC     L09FA
+                JSR     a_scan_init
+
+                DEC     L09FA
+                JMP     a0_mode2_adjust
+
+.a0_mode2_inc   JSR     a_move_inc
+
+                JMP     a0_mode2_cmp
+
+.a0_mode2_dec   JSR     a_move_dec
+
+                JMP     a0_mode2_cmp
+
+.a0_gate_path   JSR     a_calc_phase_delta
 
                 CLC
                 CMP     L09B0
-                BEQ     LA17E
+                BEQ     a0_gate_path_ret
 
-                BCC     LA191
+                BCC     a0_gate_path_lo
 
-                BCS     LA181
+                BCS     a0_gate_path_hi
 
-.LA17E          JMP     LA0CA
+.a0_gate_path_retJMP    a0_eval
 
-.LA181          LDA     L0993
+.a0_gate_path_hiLDA     L0993
                 EOR     #$FF
                 CLC
                 CMP     L09B2
-                BEQ     LA17E
+                BEQ     a0_gate_path_ret
 
-                BCS     LA1A1
+                BCS     a0_case_to_31b
 
-                JMP     LA1A7
+                JMP     a0_case1
 
-.LA191          LDA     L0993
+.a0_gate_path_loLDA     L0993
                 EOR     #$FF
                 CLC
                 CMP     L09B2
-                BEQ     LA17E
+                BEQ     a0_gate_path_ret
 
-                BCS     LA1A4
+                BCS     a0_case_to_2a3
 
-                JMP     LA21F
+                JMP     a0_case2
 
-.LA1A1          JMP     LA31B
+.a0_case_to_31b JMP     a0_case4
 
-.LA1A4          JMP     LA2A3
+.a0_case_to_2a3 JMP     a0_case3
 
-.LA1A7          JSR     LA3F8
+.a0_case1       JSR     a_calc_phase_delta
 
                 SEC
                 SBC     L09B0
@@ -3835,13 +3763,13 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09F4
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F2
                 STA     L09FF
                 LDA     L09F3
                 STA     L0A00
-.LA1D2          JSR     LA3F8
+.a0_case1_loop  JSR     a_calc_phase_delta
 
                 SEC
                 SBC     L09B0
@@ -3853,40 +3781,40 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09F4
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F3
                 CLC
                 CMP     L0A00
-                BEQ     LA202
+                BEQ     a0_case1_cmp_frac
 
-                BCC     LA219
+                BCC     a0_case1_step_coarse
 
-                JSR     LA3A7
+                JSR     a_move_dec_fine
 
-                JMP     LA20E
+                JMP     a0_case1_check
 
-.LA202          LDA     L09F2
+.a0_case1_cmp_fracLDA   L09F2
                 CLC
                 CMP     L09FF
-                BCC     LA219
+                BCC     a0_case1_step_coarse
 
-                JSR     LA3A7
+                JSR     a_move_dec_fine
 
-.LA20E          JSR     LA3D7
+.a0_case1_check JSR     a_cmp_window
 
                 CMP     #$01
-                BNE     LA1D2
+                BNE     a0_case1_loop
 
-                JSR     LA3C7
+                JSR     a_move_commit
 
                 RTS
 
-.LA219          JSR     LA387
+.a0_case1_step_coarseJSRa_move_dec
 
-                JMP     LA20E
+                JMP     a0_case1_check
 
-.LA21F          JSR     LA3F8
+.a0_case2       JSR     a_calc_phase_delta
 
                 STA     L09F4
                 LDA     L09B0
@@ -3900,13 +3828,13 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09F4
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F2
                 STA     L09FF
                 LDA     L09F3
                 STA     L0A00
-.LA250          JSR     LA3F8
+.a0_case2_loop  JSR     a_calc_phase_delta
 
                 STA     L09F4
                 LDA     L09B0
@@ -3920,40 +3848,40 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09F4
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F3
                 CLC
                 CMP     L0A00
-                BEQ     LA286
+                BEQ     a0_case2_cmp_frac
 
-                BCC     LA29D
+                BCC     a0_case2_step_coarse
 
-                JSR     LA3B7
+                JSR     a_move_inc_fine
 
-                JMP     LA292
+                JMP     a0_case2_check
 
-.LA286          LDA     L09F2
+.a0_case2_cmp_fracLDA   L09F2
                 CLC
                 CMP     L09FF
-                BCC     LA29D
+                BCC     a0_case2_step_coarse
 
-                JSR     LA3B7
+                JSR     a_move_inc_fine
 
-.LA292          JSR     LA3D7
+.a0_case2_check JSR     a_cmp_window
 
                 CMP     #$01
-                BNE     LA250
+                BNE     a0_case2_loop
 
-                JSR     LA3C7
+                JSR     a_move_commit
 
                 RTS
 
-.LA29D          JSR     LA387
+.a0_case2_step_coarseJSRa_move_dec
 
-                JMP     LA292
+                JMP     a0_case2_check
 
-.LA2A3          JSR     LA3F8
+.a0_case3       JSR     a_calc_phase_delta
 
                 STA     L09F4
                 LDA     L09B0
@@ -3965,13 +3893,13 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09B2
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F2
                 STA     L09FF
                 LDA     L09F3
                 STA     L0A00
-.LA2CE          JSR     LA3F8
+.a0_case3_loop  JSR     a_calc_phase_delta
 
                 STA     L09F4
                 LDA     L09B0
@@ -3983,40 +3911,40 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09B2
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F3
                 CLC
                 CMP     L0A00
-                BEQ     LA2FE
+                BEQ     a0_case3_cmp_frac
 
-                BCC     LA315
+                BCC     a0_case3_step_coarse
 
-                JSR     LA3B7
+                JSR     a_move_inc_fine
 
-                JMP     LA30A
+                JMP     a0_case3_check
 
-.LA2FE          LDA     L09F2
+.a0_case3_cmp_fracLDA   L09F2
                 CLC
                 CMP     L09FF
-                BCC     LA315
+                BCC     a0_case3_step_coarse
 
-                JSR     LA3B7
+                JSR     a_move_inc_fine
 
-.LA30A          JSR     LA3D7
+.a0_case3_check JSR     a_cmp_window
 
                 CMP     #$01
-                BNE     LA2CE
+                BNE     a0_case3_loop
 
-                JSR     LA3C7
+                JSR     a_move_commit
 
                 RTS
 
-.LA315          JSR     LA397
+.a0_case3_step_coarseJSRa_move_inc
 
-                JMP     LA30A
+                JMP     a0_case3_check
 
-.LA31B          JSR     LA3F8
+.a0_case4       JSR     a_calc_phase_delta
 
                 SEC
                 SBC     L09B0
@@ -4026,13 +3954,13 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09B2
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F2
                 STA     L09FF
                 LDA     L09F3
                 STA     L0A00
-.LA340          JSR     LA3F8
+.a0_case4_loop  JSR     a_calc_phase_delta
 
                 SEC
                 SBC     L09B0
@@ -4042,115 +3970,115 @@ LA0F7 = LA0F6+1
                 SEC
                 SBC     L09B2
                 STA     L09F0
-                JSR     LA41A
+                JSR     a_div_setup
 
                 LDA     L09F3
                 CLC
                 CMP     L0A00
-                BEQ     LA36A
+                BEQ     a0_case4_cmp_frac
 
-                BCC     LA381
+                BCC     a0_case4_step_coarse
 
-                JSR     LA3A7
+                JSR     a_move_dec_fine
 
-                JMP     LA376
+                JMP     a0_case4_check
 
-.LA36A          LDA     L09F2
+.a0_case4_cmp_fracLDA   L09F2
                 CLC
                 CMP     L09FF
-                BCC     LA381
+                BCC     a0_case4_step_coarse
 
-                JSR     LA3A7
+                JSR     a_move_dec_fine
 
-.LA376          JSR     LA3D7
+.a0_case4_check JSR     a_cmp_window
 
                 CMP     #$01
-                BNE     LA340
+                BNE     a0_case4_loop
 
-                JSR     LA3C7
+                JSR     a_move_commit
 
                 RTS
 
-.LA381          JSR     LA397
+.a0_case4_step_coarseJSRa_move_inc
 
-                JMP     LA376
+                JMP     a0_case4_check
 
-.LA387          JSR     LA50C
+.a_move_dec     JSR     a_scan_init
 
                 DEC     L0962
                 INC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 DEC     L09FA
                 RTS
 
-.LA397          JSR     LA50C
+.a_move_inc     JSR     a_scan_init
 
                 INC     L0962
                 INC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 DEC     L09FA
                 RTS
 
-.LA3A7          JSR     LA50C
+.a_move_dec_fineJSR     a_scan_init
 
-                JSR     LA448
+                JSR     a_phase_dec
 
                 INC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 DEC     L09FA
                 RTS
 
-.LA3B7          JSR     LA50C
+.a_move_inc_fineJSR     a_scan_init
 
-                JSR     LA486
+                JSR     a_phase_inc
 
                 INC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 DEC     L09FA
                 RTS
 
-.LA3C7          JSR     LA50C
+.a_move_commit  JSR     a_scan_init
 
-                JSR     LAC37
+                JSR     a_guard_entry
 
-.LA3CD          INC     L09FA
-LA3CF = LA3CD+2
-                JSR     LA50C
+.a_move_commit2 INC     L09FA
+LA3CF = a_move_commit2+2
+                JSR     a_scan_init
 
                 DEC     L09FA
                 RTS
 
-.LA3D7          LDY     #$00
+.a_cmp_window   LDY     #$00
                 LDA     L0993
                 EOR     #$FF
                 CMP     L09B2
-                BEQ     LA3E4
+                BEQ     a_cmp_window_cmp2
 
                 INY
-.LA3E4          JSR     LA3F8
+.a_cmp_window_cmp2JSR   a_calc_phase_delta
 
                 CLC
                 CMP     L09B0
-                BEQ     LA3EE
+                BEQ     a_cmp_window_ret
 
                 INY
-.LA3EE          CPY     #$00
-                BEQ     LA3F5
+.a_cmp_window_retCPY    #$00
+                BEQ     a_cmp_window_true
 
                 LDA     #$00
                 RTS
 
-.LA3F5          LDA     #$01
+.a_cmp_window_trueLDA   #$01
                 RTS
 
-.LA3F8          LDA     #$03
+.a_calc_phase_deltaLDA  #$03
                 SEC
                 SBC     L0932
-                BCS     LA40E
+                BCS     a_calc_phase_delta_ge
 
                 EOR     #$FF
                 STA     L09F4
@@ -4160,40 +4088,40 @@ LA3CF = LA3CD+2
                 ADC     L09F4
                 RTS
 
-.LA40E          STA     L09F4
+.a_calc_phase_delta_geSTAL09F4
                 LDA     L0992
                 ASL     A
                 SEC
                 SBC     L09F4
                 RTS
 
-.LA41A          LDY     #$00
+.a_div_setup    LDY     #$00
                 STY     L09F6
                 LDY     #$10
-.LA421          ASL     L09F5
+.a_div_loop     ASL     L09F5
                 ROL     L09F6
                 LDA     L09F6
                 SEC
                 SBC     L09F0
-                BMI     LA439
+                BMI     a_div_sub_neg
 
                 ROL     L09F2
                 STA     L09F6
-                JMP     LA43C
+                JMP     a_div_next
 
-.LA439          ASL     L09F2
-.LA43C          ROL     L09F3
+.a_div_sub_neg  ASL     L09F2
+.a_div_next     ROL     L09F3
                 DEY
                 CPY     #$00
-                BEQ     LA447
+                BEQ     a_div_done
 
-                JMP     LA421
+                JMP     a_div_loop
 
-.LA447          RTS
+.a_div_done     RTS
 
-.LA448          LDA     #$00
+.a_phase_dec    LDA     #$00
                 CMP     L0932
-                BEQ     LA467
+                BEQ     a_phase_dec_wrap
 
                 DEC     L0932
                 LDY     #$03
@@ -4201,16 +4129,16 @@ LA3CF = LA3CD+2
                 CLC
                 ADC     L0914
                 STA     (L0094),Y
-                BCC     LA466
+                BCC     a_phase_dec_ret
 
                 INY
                 LDA     (L0094),Y
                 CLC
                 ADC     #$01
                 STA     (L0094),Y
-.LA466          RTS
+.a_phase_dec_retRTS
 
-.LA467          DEC     L0961
+.a_phase_dec_wrapDEC    L0961
                 DEC     L0961
                 LDY     #$03
                 LDA     (L0094),Y
@@ -4226,9 +4154,9 @@ LA3CF = LA3CD+2
                 LDY     #$00
                 RTS
 
-.LA486          LDA     #$06
+.a_phase_inc    LDA     #$06
                 CMP     L0932
-                BEQ     LA4A2
+                BEQ     a_phase_inc_wrap
 
                 INC     L0932
                 LDY     #$03
@@ -4242,28 +4170,28 @@ LA3CF = LA3CD+2
                 STA     (L0094),Y
                 RTS
 
-.LA4A2          LDY     #$03
+.a_phase_inc_wrapLDY    #$03
                 LDA     (L0094),Y
                 CLC
                 ADC     L0915
                 STA     (L0094),Y
-                BCC     LA4B6
+                BCC     a_phase_inc_done
 
                 INY
                 LDA     (L0094),Y
                 CLC
                 ADC     #$01
                 STA     (L0094),Y
-.LA4B6          LDY     #$03
+.a_phase_inc_doneLDY    #$03
                 STY     L0932
                 INC     L0961
                 INC     L0961
                 LDY     #$00
                 RTS
 
-.LA4C4          LDA     #$00
-.LA4C6          STA     L0960
-LA4C7 = LA4C6+1
+.a_plonks_init  LDA     #$00
+.a_plonks_init_storeSTA L0960
+plonks_hnd = a_plonks_init_store+1
                 LDA     #$76
                 STA     L0961
                 LDA     #$78
@@ -4293,23 +4221,23 @@ LA4C7 = LA4C6+1
                 STA     L091C
                 RTS
 
-.LA50C          LDY     #$00
+.a_scan_init    LDY     #$00
                 LDA     #$30
                 STA     L008B
                 LDA     #$07
                 STA     L008C
                 STY     L0916
-.LA519          CPY     L09FA
-                BEQ     LA529
+.plonkd_hnd     CPY     L09FA
+                BEQ     a_scan_load
 
                 LDA     L008F
-                BNE     LA529
+                BNE     a_scan_load
 
                 LDA     #$13
                 JSR     OSBYTE
 
                 LDY     #$00
-.LA529          LDA     #$01
+.a_scan_load    LDA     #$01
                 STA     (L0094),Y
                 INY
                 LDA     (L0094),Y
@@ -4335,31 +4263,31 @@ LA4C7 = LA4C6+1
                 CLC
                 ADC     L0090
                 STA     L0090
-                BCC     LA55F
+                BCC     a_scan_page_start
 
                 INC     L0091
-.LA55F          JSR     LA000
+.a_scan_page_startJSR   plonky_hnd
 
                 LDA     #$00
                 STA     L09A1
                 LDX     L0992
-.LA56A          LDA     L09A1
+.a_scan_row_startLDA    L09A1
                 CMP     L09A0
-                BEQ     LA5B8
+                BEQ     a_scan_next_page
 
                 LDY     #$00
                 CPY     L0913
-                BEQ     LA57C
+                BEQ     a_scan_mode_lit
 
-.LA579          JMP     LA602
+.a_scan_mode_altJMP     a_scan_blend
 
-.LA57C          LDY     #$00
+.a_scan_mode_litLDY     #$00
                 CPY     L09FA
-                BEQ     LA579
+                BEQ     a_scan_mode_alt
 
                 LDA     (L008B),Y
                 INC     L008B
-                BEQ     LA598
+                BEQ     a_scan_store_cell
 
                 PHA
                 AND     #$0F
@@ -4371,84 +4299,84 @@ LA4C7 = LA4C6+1
                 ASL     A
                 CLC
                 ADC     L091B
-.LA598          STA     (L0092),Y
+.a_scan_store_cellSTA   (L0092),Y
                 CPY     L09F9
-                BEQ     LA5D1
+                BEQ     a_scan_check_wrap
 
-.LA59F          INC     L0090
-                BNE     LA5A5
+.a_scan_next_srcINC     L0090
+                BNE     a_scan_stride_dst
 
                 INC     L0091
-.LA5A5          LDA     #$08
+.a_scan_stride_dstLDA   #$08
                 CLC
                 ADC     L0092
                 STA     L0092
-                BCC     LA5B0
+                BCC     a_scan_next_cell
 
                 INC     L0093
-.LA5B0          INX
+.a_scan_next_cellINX
                 INX
                 INC     L09A1
-                JMP     LA56A
+                JMP     a_scan_row_start
 
-.LA5B8          INC     L09A3
+.a_scan_next_pageINC    L09A3
                 LDA     L09A3
                 CMP     L09A2
-                BCS     LA5D0
+                BCS     a_scan_done
 
                 LDA     L0993
                 CMP     #$FF
-                BEQ     LA5D0
+                BEQ     a_scan_done
 
                 INC     L0993
-                JMP     LA55F
+                JMP     a_scan_page_start
 
-.LA5D0          RTS
+.a_scan_done    RTS
 
-.LA5D1          CPY     L09FA
-                BEQ     LA59F
+.a_scan_check_wrapCPY   L09FA
+                BEQ     a_scan_next_src
 
                 CPY     L09A1
-                BNE     LA5E0
+                BNE     a_scan_overlay
 
-                JSR     LA642
+                JSR     a_scan_overlay_addr
 
                 LDY     #$00
-.LA5E0          LDA     L0992
+.a_scan_overlay LDA     L0992
                 CLC
                 CMP     L09FC
-                BCS     LA59F
+                BCS     a_scan_next_src
 
                 LDA     L009D
                 CLC
                 ADC     #$08
                 STA     L009D
-                BCC     LA5F4
+                BCC     a_scan_overlay_check
 
                 INC     L009E
-.LA5F4          LDA     L009E
+.a_scan_overlay_checkLDAL009E
                 CLC
                 CMP     #$79
-                BCS     LA59F
+                BCS     a_scan_next_src
 
                 LDA     (L0092),Y
                 STA     (L009D),Y
-                JMP     LA59F
+                JMP     a_scan_next_src
 
-.LA602          LDY     #$00
+.a_scan_blend   LDY     #$00
                 LDA     (L0092),Y
                 CPY     L09FA
-                BNE     LA635
+                BNE     a_scan_blend_lit
 
                 ORA     (L0090),Y
                 EOR     (L0090),Y
                 STA     (L008B),Y
                 INC     L008B
                 LDA     (L0090),Y
-                BEQ     LA63C
+                BEQ     a_scan_blend_zero
 
                 CMP     #$0F
-                BEQ     LA63F
+                BEQ     a_scan_blend_ff
 
                 ORA     (L0092),Y
                 AND     #$0F
@@ -4463,17 +4391,17 @@ LA4C7 = LA4C6+1
                 AND     #$F0
                 CLC
                 ADC     L09B4
-                JMP     LA598
+                JMP     a_scan_store_cell
 
-.LA635          LDA     (L008B),Y
+.a_scan_blend_litLDA    (L008B),Y
                 INC     L008B
-                JMP     LA598
+                JMP     a_scan_store_cell
 
-.LA63C          JMP     LA59F
+.a_scan_blend_zeroJMP   a_scan_next_src
 
-.LA63F          JMP     LA598
+.a_scan_blend_ffJMP     a_scan_store_cell
 
-.LA642          LDA     #$00
+.a_scan_overlay_addrLDA #$00
                 STA     L009E
                 LDA     L0992
                 CLC
@@ -4515,81 +4443,81 @@ LA4C7 = LA4C6+1
                 STA     L009E
                 RTS
 
-.LA68E          LDA     L0910
+.a_cfg_dispatch LDA     plonk_cfg_id
                 CMP     #$01
-                BNE     LA698
+                BNE     a_cfg_case_02
 
-                JMP     LA6F4
+                JMP     a_cfg_preset_00
 
-.LA698          CMP     #$02
-                BNE     LA69F
+.a_cfg_case_02  CMP     #$02
+                BNE     a_cfg_case_03
 
-                JMP     LA740
+                JMP     a_cfg_preset_01
 
-.LA69F          CMP     #$03
-                BNE     LA6A6
+.a_cfg_case_03  CMP     #$03
+                BNE     a_cfg_case_04
 
-                JMP     LA795
+                JMP     a_cfg_preset_02
 
-.LA6A6          CMP     #$04
-                BNE     LA6AD
+.a_cfg_case_04  CMP     #$04
+                BNE     a_cfg_case_05
 
-                JMP     LA7EA
+                JMP     a_cfg_preset_03
 
-.LA6AD          CMP     #$05
-.LA6AF          BNE     LA6B4
+.a_cfg_case_05  CMP     #$05
+.a_cfg_case_05_bneBNE   a_cfg_case_06
 
-LA6B0 = LA6AF+1
-                JMP     LA83F
+plonkt_hnd = a_cfg_case_05_bne+1
+                JMP     a_cfg_preset_04
 
-.LA6B4          CMP     #$06
-                BNE     LA6BB
+.a_cfg_case_06  CMP     #$06
+                BNE     a_cfg_case_07
 
-                JMP     LA894
+                JMP     a_cfg_preset_05
 
-.LA6BB          CMP     #$07
-                BNE     LA6C2
+.a_cfg_case_07  CMP     #$07
+                BNE     a_cfg_case_08
 
-                JMP     LA8E9
+                JMP     a_cfg_preset_06
 
-.LA6C2          CMP     #$08
-                BNE     LA6C9
+.a_cfg_case_08  CMP     #$08
+                BNE     a_cfg_case_09
 
-                JMP     LA93E
+                JMP     a_cfg_preset_07
 
-.LA6C9          CMP     #$09
-                BNE     LA6D0
+.a_cfg_case_09  CMP     #$09
+                BNE     a_cfg_case_0a
 
-                JMP     LA993
+                JMP     a_cfg_preset_08
 
-.LA6D0          CMP     #$0A
-                BNE     LA6D7
+.a_cfg_case_0a  CMP     #$0A
+                BNE     a_cfg_case_0b
 
-                JMP     LA9E8
+                JMP     a_cfg_preset_09
 
-.LA6D7          CMP     #$0B
-                BNE     LA6DE
+.a_cfg_case_0b  CMP     #$0B
+                BNE     a_cfg_case_0c
 
-                JMP     LAA3D
+                JMP     a_cfg_preset_0a
 
-.LA6DE          CMP     #$0C
-                BNE     LA6E5
+.a_cfg_case_0c  CMP     #$0C
+                BNE     a_cfg_case_0d
 
-                JMP     LAA92
+                JMP     a_cfg_preset_0b
 
-.LA6E5          CMP     #$0D
-                BNE     LA6EC
+.a_cfg_case_0d  CMP     #$0D
+                BNE     a_cfg_case_00
 
-                JMP     LAAE7
+                JMP     a_cfg_preset_0c
 
-.LA6EC          CMP     #$00
-                BNE     LA6F3
+.a_cfg_case_00  CMP     #$00
+                BNE     a_cfg_ret
 
-                JMP     LA6F4
+                JMP     a_cfg_preset_00
 
-.LA6F3          RTS
+.a_cfg_ret      RTS
 
-.LA6F4          JSR     LAB30
+.a_cfg_preset_00JSR     a_norm_pair
 
                 LDA     #$06
                 STA     L0932
@@ -4619,13 +4547,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$69
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA740          JSR     LAB30
+.a_cfg_preset_01JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4655,13 +4583,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$69
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA795          JSR     LAB30
+.a_cfg_preset_02JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4691,13 +4619,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$5A
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA7EA          JSR     LAB30
+.a_cfg_preset_03JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4715,7 +4643,7 @@ LA6B0 = LA6AF+1
                 STA     L09B0
                 LDA     #$57
                 STA     L09B2
-.LA81E          LDA     #$00
+.a_cfg_preset_commonLDA #$00
                 STA     L09F9
                 LDA     #$02
                 STA     L0912
@@ -4727,13 +4655,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$5A
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA83F          JSR     LAB30
+.a_cfg_preset_04JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4763,13 +4691,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$84
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA894          JSR     LAB30
+.a_cfg_preset_05JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4799,13 +4727,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$60
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA8E9          JSR     LAB30
+.a_cfg_preset_06JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4835,13 +4763,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$84
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA93E          JSR     LAB30
+.a_cfg_preset_07JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4871,13 +4799,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$A8
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA993          JSR     LAB30
+.a_cfg_preset_08JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4907,13 +4835,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$84
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LA9E8          JSR     LAB30
+.a_cfg_preset_09JSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4943,13 +4871,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$72
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LAA3D          JSR     LAB30
+.a_cfg_preset_0aJSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -4979,13 +4907,13 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$72
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LAA92          JSR     LAB30
+.a_cfg_preset_0bJSR     a_norm_pair
 
                 LDA     L0911
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$06
                 STA     L0932
@@ -5015,9 +4943,9 @@ LA6B0 = LA6AF+1
                 STA     L0914
                 LDA     #$72
                 STA     L0915
-                JMP     LAB61
+                JMP     a_norm_apply
 
-.LAAE7          LDA     #$01
+.a_cfg_preset_0cLDA     #$01
                 STA     L09F9
                 LDA     L0913
                 PHA
@@ -5035,13 +4963,13 @@ LA6B0 = LA6AF+1
                 STA     L0963
                 LDA     #$BB
                 STA     L0964
-                JSR     LA50C
+                JSR     a_scan_init
 
                 DEC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 INC     L09FA
-                JSR     LA50C
+                JSR     a_scan_init
 
                 LDA     #$00
                 STA     L09F9
@@ -5051,7 +4979,7 @@ LA6B0 = LA6AF+1
                 STA     L0913
                 RTS
 
-.LAB30          LDA     L09B0
+.a_norm_pair    LDA     L09B0
                 STA     L0936
                 LDA     L09B2
                 STA     L0937
@@ -5059,7 +4987,7 @@ LA6B0 = LA6AF+1
                 STA     L09B1
                 LDA     #$E1
                 STA     L09B0
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$00
                 STA     L09B1
@@ -5069,27 +4997,27 @@ LA6B0 = LA6AF+1
                 STA     L09B3
                 LDA     L0911
                 STA     L09B2
-                JMP     LA0CA
+                JMP     a0_eval
 
-.LAB61          JSR     LA50C
+.a_norm_apply   JSR     a_scan_init
 
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     #$E1
                 STA     L09B0
                 LDA     L0937
                 STA     L09B2
-                JSR     LA0CA
+                JSR     a0_eval
 
                 LDA     L0936
                 STA     L09B0
                 LDA     L0937
                 STA     L09B2
-                JMP     LA0CA
+                JMP     a0_eval
 
                 RTS
 
-.LAB85          JSR     LA50C
+.a_stream_init  JSR     a_scan_init
 
                 LDA     #$E0
                 STA     L008D
@@ -5098,19 +5026,19 @@ LA6B0 = LA6AF+1
                 LDY     #$00
                 STY     L0916
                 STY     L0917
-.LAB98          LDA     (L008D),Y
+.a_stream_step  LDA     (L008D),Y
                 CMP     #$FF
-                BEQ     LABCD
+                BEQ     a_stream_step_ptr
 
                 CLC
                 CMP     #$10
-                BCC     LABCD
+                BCC     a_stream_step_ptr
 
                 INC     L09B4
-.LABA6          INC     L09B4
-LABA7 = LABA6+1
+.a_stream_nibswapINC    L09B4
+plonkc_hnd = a_stream_nibswap+1
                 CPY     L0918
-                BEQ     LABBC
+                BEQ     a_stream_nibswap_loop
 
                 PHA
                 AND     #$F0
@@ -5120,9 +5048,9 @@ LABA7 = LABA6+1
                 LSR     A
                 LSR     A
                 LSR     A
-                JMP     LABC7
+                JMP     a_stream_mix
 
-.LABBC          PHA
+.a_stream_nibswap_loopPHA
                 AND     #$0F
                 STA     L091B
                 PLA
@@ -5130,37 +5058,37 @@ LABA7 = LABA6+1
                 ASL     A
                 ASL     A
                 ASL     A
-.LABC7          CLC
+.a_stream_mix   CLC
                 ADC     L091B
                 STA     (L008D),Y
-.LABCD          LDA     L008D
+.a_stream_step_ptrLDA   L008D
                 CLC
                 ADC     #$01
                 STA     L008D
-                BCC     LABD8
+                BCC     a_stream_step_cnt
 
                 INC     L008E
-.LABD8          LDA     L0916
+.a_stream_step_cntLDA   L0916
                 CLC
                 ADC     #$01
                 STA     L0916
-                BCC     LABE6
+                BCC     a_stream_wrap
 
                 INC     L0917
-.LABE6          LDA     L09B4
+.a_stream_wrap  LDA     L09B4
                 AND     #$80
-                BEQ     LABF2
+                BEQ     a_stream_inc
 
                 LDA     #$00
                 STA     L09B4
-.LABF2          INC     L09B4
+.a_stream_inc   INC     L09B4
                 LDA     L0916
                 CMP     #$90
-                BNE     LAC16
+                BNE     a_guard_tail
 
                 LDA     L0917
                 CMP     #$01
-                BNE     LAC16
+                BNE     a_guard_tail
 
                 LDA     #$00
                 STA     L0916
@@ -5169,85 +5097,85 @@ LABA7 = LABA6+1
                 CLC
                 ADC     #$F0
                 STA     L008D
-                BCC     LAC16
+                BCC     a_guard_tail
 
                 INC     L008E
-.LAC16          LDA     L008E
+.a_guard_tail   LDA     L008E
                 CMP     #$7A
-                BNE     LAC34
+                BNE     a_guard_fail
 
                 LDA     L008D
                 CMP     #$28
-                BMI     LAC34
+                BMI     a_guard_fail
 
                 LDA     L0918
-                BNE     LAC2A
+                BNE     a_guard_emit
 
-                JSR     LAC3D
+                JSR     a_guard_check
 
-.LAC2A          INC     L09FA
-                JSR     LA50C
+.a_guard_emit   INC     L09FA
+                JSR     a_scan_init
 
                 DEC     L09FA
                 RTS
 
-.LAC34          JMP     LAB98
+.a_guard_fail   JMP     a_stream_step
 
-.LAC37          LDA     L0913
-                BEQ     LAC3D
-
-                RTS
-
-.LAC3D          LDA     L09FC
-                BNE     LAC43
+.a_guard_entry  LDA     L0913
+                BEQ     a_guard_check
 
                 RTS
 
-.LAC43          LDA     L008F
-                BEQ     LAC48
+.a_guard_check  LDA     L09FC
+                BNE     a_guard_has_data
 
-.LAC47          RTS
+                RTS
 
-.LAC48          LDA     L09B0
+.a_guard_has_dataLDA    L008F
+                BEQ     a_guard_cmp1
+
+.a_guard_ret    RTS
+
+.a_guard_cmp1   LDA     L09B0
                 CLC
                 CMP     #$3C
-                BCC     LAC51
+                BCC     a_guard_cmp2
 
                 RTS
 
-.LAC51          LDA     L0910
+.a_guard_cmp2   LDA     plonk_cfg_id
                 CMP     #$0C
-                BEQ     LAC6E
+                BEQ     a_guard_cmp5
 
                 LDA     L09B2
                 CMP     #$4D
-                BCC     LAC60
+                BCC     a_guard_cmp3
 
                 RTS
 
-.LAC60          CMP     #$3C
-                BCS     LAC65
+.a_guard_cmp3   CMP     #$3C
+                BCS     a_guard_cmp4
 
                 RTS
 
-.LAC65          LDA     L0910
+.a_guard_cmp4   LDA     plonk_cfg_id
                 CMP     #$0B
-                BNE     LAC47
+                BNE     a_guard_ret
 
-                BEQ     LAC7B
+                BEQ     a_guard_prep
 
-.LAC6E          LDA     L09B2
+.a_guard_cmp5   LDA     L09B2
                 CMP     #$5A
-                BCC     LAC76
+                BCC     a_guard_cmp6
 
                 RTS
 
-.LAC76          CMP     #$42
-                BCS     LAC7B
+.a_guard_cmp6   CMP     #$42
+                BCS     a_guard_prep
 
                 RTS
 
-.LAC7B          LDA     L0065
+.a_guard_prep   LDA     L0065
                 STA     L09F4
                 LDA     #$00
                 STA     L0935
@@ -5293,7 +5221,7 @@ LABA7 = LABA6+1
                 LDA     #$02
                 ADC     L09B5
                 STA     L09B5
-.LACE6          LDX     #$00
+.a_guard_move   LDX     #$00
                 LDY     #$00
                 LDA     L0934
                 STA     L0916
@@ -5303,18 +5231,18 @@ LABA7 = LABA6+1
                 STA     L008D
                 LDA     L09B9
                 STA     L008E
-.LAD00          LDA     L0935
+.a_guard_move_loopLDA   L0935
                 CLC
                 CMP     #$7F
-                BCC     LAD15
+                BCC     a_guard_move_hi
 
                 LDA     L09B8
                 STA     L0076
                 LDA     L09B9
                 STA     L0077
-                JMP     LAD46
+                JMP     a_guard_post
 
-.LAD15          LDA     L0934
+.a_guard_move_hiLDA     L0934
                 STA     L0076
                 SEC
                 SBC     #$80
@@ -5323,25 +5251,25 @@ LABA7 = LABA6+1
                 STA     L0077
                 SBC     #$02
                 STA     L009B
-.LAD28          LDA     (L009A),Y
+.a_guard_copy_loopLDA   (L009A),Y
                 STA     (L0076),Y
                 INC     L0076
-                BNE     LAD32
+                BNE     a_guard_copy_src_inc
 
                 INC     L0077
-.LAD32          INC     L009A
-                BNE     LAD38
+.a_guard_copy_src_incINCL009A
+                BNE     a_guard_copy_cmp
 
                 INC     L009B
-.LAD38          LDA     L0076
+.a_guard_copy_cmpLDA    L0076
                 CMP     L09B8
-                BNE     LAD28
+                BNE     a_guard_copy_loop
 
                 LDA     L0077
                 CMP     L09B9
-                BNE     LAD28
+                BNE     a_guard_copy_loop
 
-.LAD46          LDA     L0076
+.a_guard_post   LDA     L0076
                 SEC
                 SBC     L09B4
                 STA     L0934
@@ -5357,7 +5285,7 @@ LABA7 = LABA6+1
                 STA     L09B9
                 INX
                 CPX     #$0C
-                BNE     LAD00
+                BNE     a_guard_move_loop
 
                 LDA     L0916
                 CLC
@@ -5381,18 +5309,18 @@ LABA7 = LABA6+1
                 STA     L009A
                 LDA     #$7D
                 STA     L009B
-.LAD9F          LDA     (L009A),Y
-                BNE     LADAD
+.a_guard_scan_freeLDA   (L009A),Y
+                BNE     a_guard_scan_hit
 
                 TYA
                 CLC
                 ADC     #$08
                 TAY
-                BNE     LAD9F
+                BNE     a_guard_scan_free
 
-                JMP     LACE6
+                JMP     a_guard_move
 
-.LADAD          LDA     #$00
+.a_guard_scan_hitLDA    #$00
                 STA     L09FC
                 LDA     L09F4
                 STA     L0065
@@ -5430,7 +5358,7 @@ LABA7 = LABA6+1
                 STA     L0914
                 LDA     #$57
                 STA     L0915
-                JMP     LAE88
+                JMP     a_span_apply
 
                 LDA     #$01
                 STA     L09F9
@@ -5450,13 +5378,13 @@ LABA7 = LABA6+1
                 STA     L0963
                 LDA     #$BB
                 STA     L0964
-                JSR     LA81E
+                JSR     a_cfg_preset_common
 
                 DEC     L09FA
-                JSR     LA81E
+                JSR     a_cfg_preset_common
 
                 INC     L09FA
-                JSR     LA81E
+                JSR     a_cfg_preset_common
 
                 LDA     #$00
                 STA     L09F9
@@ -5486,7 +5414,7 @@ LABA7 = LABA6+1
                 STA     L09B2
                 JMP     LA3CF
 
-.LAE88          JSR     LA81E
+.a_span_apply   JSR     a_cfg_preset_common
 
                 JSR     LA3CF
 
@@ -5504,7 +5432,7 @@ LABA7 = LABA6+1
 
                 RTS
 
-                JSR     LA81E
+                JSR     a_cfg_preset_common
 
                 LDA     #$E0
                 STA     L008D
@@ -5513,18 +5441,18 @@ LABA7 = LABA6+1
                 LDY     #$00
                 STY     L0916
                 STY     L0917
-.LAEBF          LDA     (L008D),Y
+.a_span_scan    LDA     (L008D),Y
                 CMP     #$FF
-                BEQ     LAEF4
+                BEQ     a_span_ptr_inc
 
                 CLC
                 CMP     #$10
-                BCC     LAEF4
+                BCC     a_span_ptr_inc
 
                 INC     L09B4
                 INC     L09B4
                 CPY     L0918
-                BEQ     LAEE3
+                BEQ     a_span_swap
 
                 PHA
                 AND     #$F0
@@ -5534,9 +5462,9 @@ LABA7 = LABA6+1
                 LSR     A
                 LSR     A
                 LSR     A
-                JMP     LAEEE
+                JMP     a_span_mix
 
-.LAEE3          PHA
+.a_span_swap    PHA
                 AND     #$0F
                 STA     L091B
                 PLA
@@ -5544,37 +5472,37 @@ LABA7 = LABA6+1
                 ASL     A
                 ASL     A
                 ASL     A
-.LAEEE          CLC
+.a_span_mix     CLC
                 ADC     L091B
                 STA     (L008D),Y
-.LAEF4          LDA     L008D
+.a_span_ptr_inc LDA     L008D
                 CLC
                 ADC     #$01
                 STA     L008D
-                BCC     LAEFF
+                BCC     a_span_cnt_inc
 
                 INC     L008E
-.LAEFF          LDA     L0916
+.a_span_cnt_inc LDA     L0916
                 CLC
                 ADC     #$01
                 STA     L0916
-                BCC     LAF0D
+                BCC     a_span_wrap
 
                 INC     L0917
-.LAF0D          LDA     L09B4
+.a_span_wrap    LDA     L09B4
                 AND     #$80
-                BEQ     LAF19
+                BEQ     a_span_next
 
                 LDA     #$00
                 STA     L09B4
-.LAF19          INC     L09B4
+.a_span_next    INC     L09B4
                 LDA     L0916
                 CMP     #$90
-                BNE     LAF3D
+                BNE     a_span_tail
 
                 LDA     L0917
                 CMP     #$01
-                BNE     LAF3D
+                BNE     a_span_tail
 
                 LDA     #$00
                 STA     L0916
@@ -5583,51 +5511,51 @@ LABA7 = LABA6+1
                 CLC
                 ADC     #$F0
                 STA     L008D
-                BCC     LAF3D
+                BCC     a_span_tail
 
                 INC     L008E
-.LAF3D          LDA     L008E
+.a_span_tail    LDA     L008E
                 CMP     #$7A
-                BNE     LAF53
+                BNE     a_span_restart
 
                 LDA     L008D
                 CMP     #$28
-                BMI     LAF53
+                BMI     a_span_restart
 
                 INC     L09FA
-                JSR     LA81E
+                JSR     a_cfg_preset_common
 
                 DEC     L09FA
                 RTS
 
-.LAF53          JMP     LAEBF
+.a_span_restart JMP     a_span_scan
 
                 LDA     L09B0
                 CLC
                 CMP     #$32
-                BCC     LAF5F
+                BCC     a_toolchk_x_min
 
                 RTS
 
-.LAF5F          LDA     L09B2
+.a_toolchk_x_minLDA     L09B2
                 CMP     #$4D
-                BCC     LAF67
+                BCC     a_toolchk_x_lo
 
                 RTS
 
-.LAF67          CMP     #$41
-LAF68 = LAF67+1
-                BCS     LAF6C
+.a_toolchk_x_lo CMP     #$41
+LAF68 = a_toolchk_x_lo+1
+                BCS     a_toolchk_mode
 
                 RTS
 
-.LAF6C          LDA     L0910
+.a_toolchk_mode LDA     plonk_cfg_id
                 CMP     #$0B
-                BEQ     LAF74
+                BEQ     a_toolchk_clear
 
                 RTS
 
-.LAF74          LDA     #$FF
+.a_toolchk_clearLDA     #$FF
                 STA     L3001
                 STA     L3002
                 STA     L3003
@@ -5644,25 +5572,25 @@ LAF68 = LAF67+1
                 INC     L1E30
                 BEQ     LAF68
 
-                BCS     LAF9F
+                BCS     misc_data_af9f
 
-.LAF9F          BEQ     LAFB0
+.misc_data_af9f BEQ     LAFB0
 
                 SBC     (L0035),Y
                 SBC     L009F,X
                 SED
                 BNE     LAFB8
 
-                BVC     LAFAC
+                BVC     misc_data_afac
 
-.LAFAC          BIT     L1D68
-.LAFAF          LDY     #$4F
-LAFB0 = LAFAF+1
-                BVS     LB002
+.misc_data_afac BIT     L1D68
+.misc_data_afaf LDY     #$4F
+LAFB0 = misc_data_afaf+1
+                BVS     misc_data_b002
 
                 INC     L00CF,X
                 SBC     L750F,Y
-.LAFB9          RTI
+.misc_data_afb9 RTI
 
                 ASL     A
                 ADC     (L008F),Y
@@ -5670,15 +5598,15 @@ LAFB0 = LAFAF+1
 
                 AND     (L001F),Y
                 SBC     (L009E),Y
-.LAFC5          SBC     L007F,X
-LAFC6 = LAFC5+1
+.misc_data_afc5 SBC     plonk_zero_word,X
+LAFC6 = misc_data_afc5+1
                 LDY     L0085,X
                 RTI
 
                 ORA     (L00D1,X)
                 BMI     LAFD6
 
-                ADC     L007F,X
+                ADC     plonk_zero_word,X
                 CMP     #$37
                 BVC     LAFDE
 
@@ -5703,7 +5631,7 @@ LAFC6 = LAFC5+1
                 ROR     L404B,X
                 JSR     L510D
 
-.LB002          BRK
+.misc_data_b002 BRK
                 EQUB    $00
 
                 BRK
@@ -6011,7 +5939,7 @@ LAFC6 = LAFC5+1
                 EQUB    $00,$00,$08,$00,$04,$07,$00,$07
                 EQUB    $0C
 
-.LB25F          EQUB    $00,$00,$07,$0C,$00,$00,$07,$0C
+.misc_data_b25f EQUB    $00,$00,$07,$0C,$00,$00,$07,$0C
                 EQUB    $00,$00,$07,$0C,$00,$00,$07,$0C
                 EQUB    $00,$00,$03,$08,$00,$00,$01,$00
                 EQUB    $00,$04,$07,$00,$0F,$08,$00,$00
@@ -6167,7 +6095,7 @@ LAFC6 = LAFC5+1
                 EQUB    $0E,$00,$00,$0F,$0F,$0F,$0E,$00
                 EQUB    $00,$07,$0F,$0F,$0E
 
-.LB705          EQUB    $00,$00,$03,$0F,$0F,$0E,$00,$06
+.misc_data_b705 EQUB    $00,$00,$03,$0F,$0F,$0E,$00,$06
                 EQUB    $07,$00,$07,$0F,$0F,$0C,$00,$00
                 EQUB    $0F,$0F,$0F,$0C,$00,$01,$0F,$0F
                 EQUB    $0F,$0C,$00,$03,$0F,$0F,$0F,$0C
