@@ -1,0 +1,183 @@
+load $8000 tcl125_2.02.rom
+save tcl202.asm
+
+symbols mos.asm
+symbols tcl202_sym.asm
+
+byte $8000 1
+word $8001 1
+entry pc
+byte $8005 1
+byte $8006 1
+byte $8007 1
+
+byte $8009 1
+string $800A 3 ; "(C)"
+byte $800D 1
+entry pc
+
+string $817A 23 ; "MW CONTROLS TCL 125/240"
+byte $8191 2
+string $8193 12 ; "VERSION 2.02"
+byte $819F 2
+byte $81A1 1
+entry pc
+
+string $82C5 5 ; "WRITE"
+string $82CD 5 ; "O.Dia"
+string $82D5 4 ; "LINE"
+
+string $840B 8 ; ""$.HELP""
+entry pc
+
+string $8418 12 ; "#c,G%,MA,A$:"
+string $8425 8 ; "G%=-9999"
+string $843C 8 ; "G%<>-999"
+string $8446 4 ; ""G"+"
+string $844B 6 ; "(G%);:"
+string $845B 4 ; ""M"+"
+string $8460 5 ; "(MA);"
+string $847A 16 ; "''"PRESS SPACE":"
+string $848D 6 ; "(-99):"
+string $8494 8 ; ":*FX14,4"
+string $84A0 7 ; "*PLONK8"
+string $84AB 7 ; "*L.B.S1"
+string $84B6 7 ; "*PLONK-"
+string $84C2 7 ; "N%<>100"
+string $84CA 7 ; "G%=2540"
+string $84D2 6 ; "G%=100"
+string $84DE 12 ; "7,1);$&1300;"
+string $84EB 5 ; "36,1)"
+string $84F1 12 ; "($&1308)/G%;"
+string $84FE 14 ; "50,1)"I.Dia ";"
+string $850D 12 ; "($&1310)/G%;"
+string $851A 16 ; "65,1);"Length ";"
+string $852B 12 ; "($&1318)/G%:"
+string $853B 4 ; "J%=1"
+string $8540 37 ; "8:c=?(&950+QR)+256*?(&951+QR):QR=QR+2"
+string $856A 7 ; "c=32768"
+string $8572 13 ; "N$(1,J%)="0":"
+string $858B 27 ; "?&CFE=?&7C:?&CFF=?&7D:*FX19"
+string $85AA 7 ; "*PLONKG"
+string $85B3 7 ; "^4QR=0:"
+string $85BB 4 ; "J%=1"
+string $85C0 37 ; "8:c=?(&950+QR)+256*?(&951+QR):QR=QR+2"
+string $85EA 7 ; "c=32768"
+string $85F2 13 ; "N$(1,J%)="0":"
+string $8609 3 ; "c=0"
+string $860D 12 ; "N$(1,J%)="":"
+string $8623 7 ; "c>32768"
+string $862B 9 ; "c=c-65536"
+string $8639 4 ; "J%>2"
+string $863E 5 ; "J%<>8"
+string $8644 7 ; "c=c/N%:"
+string $864C 4 ; "c<.1"
+string $8651 5 ; "c>-.1"
+string $8657 12 ; "@%=&01020307"
+string $8667 9 ; "N$(1,J%)="
+string $8671 16 ; "(c):@%=&01000707"
+string $8686 4 ; "J%<3"
+string $868C 13 ; "(N$(1,J%))<10"
+string $869A 21 ; "N$(1,J%)="0"+N$(1,J%)"
+string $86B8 5 ; "1,J%)"
+string $86C6 9 ; ");$&1300;"
+string $86D0 5 ; "36,1)"
+string $86D6 13 ; "($&1308)/100;"
+string $86E4 14 ; "50,1)"I.Dia ";"
+string $86F3 13 ; "($&1310)/100;"
+string $8706 6 ; "P:X=0:"
+string $8710 58 ; "do(0,0,0,-(Z+ZO),0,0,0,0,0,0):XP=XP+(SC*XO):ZP=ZP+(SC*ZO):"
+string $874B 24 ; "do(0,5,0,0,0,0,0,0,0,0):"
+string $8764 5 ; "busy:"
+string $876A 3 ; "=0:"
+string $8774 5 ; ">100:"
+string $877A 22 ; "SPEED:?&65=0:*PLONKOFF"
+string $8792 13 ; "J3!&7C=&1250:"
+string $87A0 24 ; "GETLINE:XP=X*SC:ZP=Z*SC:"
+string $87B9 5 ; " K=0 "
+string $87BF 4 ; " K=1"
+string $87C8 7 ; "turret:"
+string $87D1 24 ; "0,12);"MAKE ANOTHER";A$:"
+string $87EA 7 ; "A$<>"Y""
+string $87F3 11 ; ""$.CNCMENU""
+string $8804 5 ; "0,12)"
+string $880A 18 ; "(22):@%=&01000707:"
+string $881E 70 ; "0,12)"LOAD BILLET & CHANGE TO TOOL ";?&1228:@%=L%:?&910=?&1228:*PLONKT"
+string $8869 18 ; "24,220;0;900;500;:"
+string $887C 6 ; "0,128:"
+string $8888 18 ; "24,0;0;1270;1023;:"
+string $889B 4 ; "0,3:"
+string $88A0 16 ; "4,100,304-V%*MMM"
+string $88B5 21 ; "5,190+H%*Q,304-V%*MMM"
+string $88CF 17 ; "85,100,303+V%*MMM"
+string $88E5 22 ; "85,190+H%*Q,303+V%*MMM"
+string $8900 3 ; "N=0"
+string $890E 4 ; "0,0:"
+string $8913 14 ; "4,100,304-V%*N"
+string $8926 20 ; "5,190+H%*Q,304-V%*N "
+string $893F 15 ; "85,100,303+V%*N"
+string $8953 21 ; "85,190+H%*Q,303+V%*N "
+string $896E 48 ; "0,13)"CHECK S.RANGE AND PRESS START CYCLE":run%="
+string $899F 8 ; ":?&65=1:"
+string $89A8 12 ; "cont:?&65=0:"
+string $89B6 6 ; "0,12);"
+string $89BD 5 ; "(36)'"
+string $89C3 4 ; "(36)"
+string $89CA 21 ; "&XO=0:ZO=0:DX=0:DZ=0:"
+string $89E0 13 ; "ZERO:*PLONKON"
+string $8A0B 12 ; "DX=XO:DZ=ZO:"
+string $8A18 3 ; "S<1"
+string $8A1C 3 ; "S>4"
+string $8A27 15 ; "Th@%=&01000707:"
+string $8A38 85 ; "0,12)"CHANGE TO RANGE ";S;" AND TOOL ";X(5)'"THEN PRESS CYCLE START":@%=L%:*PLONKWARM"
+string $8A9B 4 ; "K<>0"
+string $8AB8 70 ; "0,12)"CHANGE TO TOOL ";X(5)'"THEN PRESS CYCLE START":@%=L%:*PLONKWARM "
+string $8B00 14 ; "|)?&65=1:run%="
+string $8B11 22 ; "cont:?&65=0:*PLONKOFF "
+string $8B2D 6 ; "0,12);"
+string $8B34 5 ; "(30)'"
+string $8B3A 4 ; "(22)"
+string $8B42 15 ; "ADD=&1228:@%=L%"
+string $8B56 9 ; "?ADD=X(5)"
+string $8B69 10 ; "ADD=ADD+5:"
+string $8B74 9 ; "ADD<&1248"
+string $8B88 25 ; ""NO TOOL OFFSET FOUND!!":"
+string $8BA6 24 ; "XO=?(ADD+1)+256*?(ADD+2)"
+string $8BC3 8 ; "XO>32768"
+string $8BCC 11 ; "XO=XO-65536"
+string $8BDB 24 ; "ZO=?(ADD+3)+256*?(ADD+4)"
+string $8BF8 8 ; "ZO>32768"
+string $8C01 11 ; "ZO=ZO-65536"
+string $8C0F 19 ; "MDX=XO-DX:DZ=ZO-DZ:"
+string $8C23 27 ; "do(0,0,DX,0,0,0,0,0,SSL,0):"
+string $8C3F 26 ; "do(0,0,0,DZ,0,0,0,0,SSL,0)"
+string $8C6D 6 ; "jjjji-"
+string $917E 27 ; "MW CONTROL T.C.L ROM System"
+string $919C 15 ; "Big Cat Version"
+
+entry $9322
+
+string $98DB 505 ; "G00=RAPID MOVEMENT@G01=LINEAR MOVEMENT  F=FEEDRATE @G02=CIRCULAR INTERPOLATION (CW)-I & K ARE CO-ORDINATES OF CENTRE@G03=CIRCULAR INTERPOLATION (CCW)-I & K ARE CO-ORDINATES OF CENTRE@G70=IMPERIAL UNITS SELECTED@G71=METRIC UNITS SELECTED@G81=O/Dia TURNING CYCLE X=TOT.DEPTH Z=TOT.LENGTH I=No OF CUTS F=FEEDRATE@G82=FACING CYCLE X=TOT.DEPTH Z=TOT.CUT WIDTH I=No OF CUTS F=FEEDRATE@G83=PECK DRILL CYCLE Z=TOT.DEPTH I=DRILL DIA K=REDUCTION F=FEEDRATE@G84=THREAD CYCLE Z=TOT.LENGTH I=DEPTH K=No OF CUTS F=PITCH"
+string $9AD6 437 ; "CUTTING TOOLS ARE 4 & 10  USE SPEED RANGE 4 ONLY@G90=ABSOLUTE PROGRAMMING SELECTED@G91=INCREMENTAL PROGRAMMING SELECTED@M02=END OF PROGRAM@M03=SPINDLE START FORWARD  S=SPEED(rpm)@M04=SPINDLE START REVERSE  S=SPEED(rpm)@M05=SPINDLE STOP@M06=TOOL CHANGE  I=TOOL No K=Turret No S=OPTIONAL SPEED RANGE CHANGE (1R-4R)@M08=COOLANT ON@M09=COOLANT OFF@M10=DWELL I = 0.1 to 25 Seconds@M39=CLOSE AIR CHUCK@M40=OPEN AIR CHUCK@M99=CONTINUATION CODE@"
+string $B0F5 7 ; ".KEYSG1"
+byte $B0FC 1
+string $B1F5 8 ; "P DWNRGT"
+byte $B1FD 1
+string $B326 10 ; "CMP PERM+1"
+string $B402 14 ; "SEC:SBC TEMP7:"
+string $B544 12 ; "CC DYUR:JSR "
+string $B764 12 ; "BCC UYDR:JSR"
+string $B8A5 11 ; ")JSR RATIO:"
+string $BFC4 6 ; " SHAPE"
+string $BFCE 20 ; "LDA #120:STA SHAPE+1"
+string $BFE6 20 ; "LDA #250:STA SHAPE+2"
+
+; byte $92b5 1
+; entry pc
+
+;byte $9538 128
+byte $95B8 128
+
+cpu 6502
+verbose 2
+stringscan
