@@ -1,4 +1,3 @@
-mod dro_decode;
 mod transport;
 
 use std::env;
@@ -6,8 +5,8 @@ use std::io;
 use std::thread;
 use std::time::Duration;
 
-use dro_decode::{counts_to_mm, Calibration, DroAssembler};
-use rp2040_fred_firmware::bridge_proto::Packet;
+use rp2040_fred_firmware::bridge_proto::{MsgType, Packet};
+use rp2040_fred_firmware::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
 use transport::{HostTransport, MockTransport, UsbTransport};
 
 fn main() -> io::Result<()> {
@@ -19,11 +18,11 @@ fn main() -> io::Result<()> {
         ("on", "mock") => set_mock_telemetry(true),
         ("off", "mock") => set_mock_telemetry(false),
         ("monitor", "mock") => {
-            let steps = args
+            let packets = args
                 .next()
                 .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(200);
-            monitor_mock(steps, Duration::from_millis(100));
+                .unwrap_or(50);
+            monitor_mock(packets, Duration::from_millis(25));
             Ok(())
         }
         ("on", "usb") => set_usb_telemetry(true),
@@ -54,20 +53,28 @@ fn set_mock_telemetry(enable: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn monitor_mock(steps: usize, period: Duration) {
+fn monitor_mock(target_packets: usize, period: Duration) {
     let mut t = MockTransport::new();
     let _ = t.transact(Packet::telemetry_set(1, true, period.as_millis() as u16));
 
-    let mut assembler = DroAssembler::new();
     let cal = Calibration::default();
 
     println!("step  X_mm        Z_mm        RPM");
-    for i in 0..steps {
-        if let Some(frame) = t.next_frame() {
-            assembler.on_fc80_fcf1(frame.cmd_fc80, frame.response_fcf1);
-            let snapshot = assembler.snapshot();
+    let mut shown = 0usize;
+    while shown < target_packets {
+        if let Some(pkt) = t.next_packet() {
+            if pkt.msg_type != MsgType::Telemetry || pkt.payload_len < 16 {
+                continue;
+            }
+            let p = pkt.payload_used();
+            let snapshot = DroSnapshot {
+                x_counts: i32::from_le_bytes([p[4], p[5], p[6], p[7]]),
+                z_counts: i32::from_le_bytes([p[8], p[9], p[10], p[11]]),
+                rpm: u16::from_le_bytes([p[12], p[13]]),
+            };
             let (x_mm, z_mm, rpm) = counts_to_mm(snapshot, cal);
-            println!("{:04}  {:+9.3}   {:+9.3}   {:5}", i, x_mm, z_mm, rpm);
+            println!("{:04}  {:+9.3}   {:+9.3}   {:5}", shown, x_mm, z_mm, rpm);
+            shown += 1;
         }
         thread::sleep(period);
     }
@@ -82,9 +89,26 @@ fn set_usb_telemetry(enable: bool) -> io::Result<()> {
 }
 
 fn monitor_usb() -> io::Result<()> {
-    let _t = UsbTransport::open(0x2E8A, 0x000A, 0)?;
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "USB monitor path not yet implemented",
-    ))
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, 0)?;
+    let _ = t.transact(Packet::telemetry_set(1, true, 25))?;
+
+    let cal = Calibration::default();
+    println!("step  X_mm        Z_mm        RPM");
+
+    let mut i = 0usize;
+    loop {
+        let pkt = t.read_packet()?;
+        if pkt.msg_type != MsgType::Telemetry || pkt.payload_len < 16 {
+            continue;
+        }
+        let p = pkt.payload_used();
+        let snapshot = DroSnapshot {
+            x_counts: i32::from_le_bytes([p[4], p[5], p[6], p[7]]),
+            z_counts: i32::from_le_bytes([p[8], p[9], p[10], p[11]]),
+            rpm: u16::from_le_bytes([p[12], p[13]]),
+        };
+        let (x_mm, z_mm, rpm) = counts_to_mm(snapshot, cal);
+        println!("{:04}  {:+9.3}   {:+9.3}   {:5}", i, x_mm, z_mm, rpm);
+        i = i.wrapping_add(1);
+    }
 }

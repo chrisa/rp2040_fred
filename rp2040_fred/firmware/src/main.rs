@@ -14,6 +14,11 @@ use crate::transport::Rp2040FredTransport;
 
 use panic_halt as _;
 
+#[cfg(feature = "usb-bridge")]
+compile_error!(
+    "Feature `usb-bridge` requires aligned Embassy versions. Current workspace has embassy-rp 0.2 and embassy-usb 0.5.1, which are incompatible (different embassy-usb-driver major versions)."
+);
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());

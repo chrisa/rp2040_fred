@@ -6,10 +6,13 @@ Status
 - Transport supports two build modes:
   - `mock-bus` (default): no hardware access, protocol/loop bring-up only.
   - `pio-real`: loads and starts real PIO state machines for the shared D0..D7 bus model.
+- `usb-bridge` feature is present but intentionally blocked at compile-time until Embassy crate versions are aligned (`embassy-rp` and `embassy-usb` currently pull incompatible `embassy-usb-driver` majors in this workspace).
 - Uses `embassy-rp`.
 
 Current Behavior
 - `src/bridge_proto.rs` defines host<->RP2040 packet framing and CRC32 checks.
+- `src/bridge_service.rs` handles bridge requests (`PING`, `TELEMETRY_SET`, `SNAPSHOT_REQ`) and emits telemetry events.
+- `src/dro_decode.rs` reconstructs X/Z/RPM from FC80/FCF1 command-response stream.
 - `src/protocol.rs` implements `FC80 -> (FCF0, FCF1)` logic for:
   - `03,02,01,00` (X sign + digits)
   - `07,06,05,04` (Z sign + digits)

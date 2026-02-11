@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DroSnapshot {
     pub x_counts: i32,

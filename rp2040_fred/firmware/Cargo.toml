@@ -7,6 +7,7 @@ edition = "2021"
 default = ["mock-bus"]
 mock-bus = []
 pio-real = []
+usb-bridge = ["dep:embassy-futures", "dep:embassy-usb"]
 
 [dependencies]
 
@@ -15,8 +16,10 @@ portable-atomic = { version = "1", features = ["critical-section"] }
 panic-halt = "0.2"
 cortex-m-rt = "0.7"
 embassy-executor = { version = "0.7", features = ["arch-cortex-m", "executor-thread"] }
+embassy-futures = { version = "0.1", optional = true }
 embassy-time = { version = "0.3", features = ["tick-hz-1_000_000"] }
 embassy-rp = { version = "0.2", features = ["critical-section-impl", "time-driver"] }
+embassy-usb = { version = "0.5.1", optional = true }
 pio = "0.2"
 pio-proc = "0.2"
 rp-pac = "6"
