@@ -6,7 +6,8 @@ Status
 - Transport supports two build modes:
   - `mock-bus` (default): no hardware access, protocol/loop bring-up only.
   - `pio-real`: loads and starts real PIO state machines for the shared D0..D7 bus model.
-- `usb-bridge` feature is present but intentionally blocked at compile-time until Embassy crate versions are aligned (`embassy-rp` and `embassy-usb` currently pull incompatible `embassy-usb-driver` majors in this workspace).
+- `usb-bridge` feature builds and exposes the bridge packet protocol over USB bulk endpoints.
+- Current `usb-bridge` telemetry source is still the internal mock cadence path; wiring to live `pio-real` FRED samples is next.
 - Uses `embassy-rp`.
 
 Current Behavior
@@ -28,10 +29,25 @@ Build
   - `cargo check`
 - Real-transport scaffold check:
   - `cargo check --no-default-features --features pio-real`
+- USB bridge firmware build:
+  - `cargo fw-build-usb`
+- USB bridge firmware flash+run over SWD (`probe-rs` runner):
+  - `cargo fw-run-usb`
 - Host-side protocol tests:
   - `cargo test --lib --target x86_64-unknown-linux-gnu`
 - Host-side mock bus trace:
   - `cargo run --example mock_bus --target x86_64-unknown-linux-gnu -- 30`
+
+Probe-rs Bring-Up
+- Install CLI (if needed):
+  - `cargo install probe-rs-tools --locked`
+- Confirm probe visibility:
+  - `probe-rs list`
+- Runner is configured in `.cargo/config.toml` for RP2040:
+  - `probe-rs run --chip RP2040 --connect-under-reset`
+- Typical bring-up flow (Pico attached via SWD + USB):
+  1. In `rp2040_fred/firmware`: `cargo fw-run-usb`
+  2. In `rp2040_fred/host`: `cargo run -- monitor usb`
 
 Next Wiring Tasks (`pio-real`)
 1. Validate control-line polarity and bus turn-around timing on hardware captures.

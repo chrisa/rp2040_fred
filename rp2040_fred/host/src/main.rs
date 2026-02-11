@@ -81,7 +81,7 @@ fn monitor_mock(target_packets: usize, period: Duration) {
 }
 
 fn set_usb_telemetry(enable: bool) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A, 0)?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     let req = Packet::telemetry_set(1, enable, 100);
     let replies = t.transact(req)?;
     println!("usb telemetry {} -> {} reply packet(s)", if enable { "ON" } else { "OFF" }, replies.len());
@@ -89,7 +89,7 @@ fn set_usb_telemetry(enable: bool) -> io::Result<()> {
 }
 
 fn monitor_usb() -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A, 0)?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     let _ = t.transact(Packet::telemetry_set(1, true, 25))?;
 
     let cal = Calibration::default();

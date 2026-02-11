@@ -2,6 +2,13 @@
 target = "thumbv6m-none-eabi"
 
 [target.thumbv6m-none-eabi]
+runner = "probe-rs run --chip RP2040"
 rustflags = [
   "-C", "link-arg=--nmagic",
 ]
+
+[alias]
+fw-build-usb = "build --no-default-features --features usb-bridge"
+fw-run-usb = "run --no-default-features --features usb-bridge"
+fw-build-pio = "build --no-default-features --features pio-real"
+fw-run-usb-defmt = "run --no-default-features --features usb-bridge,defmt-log"

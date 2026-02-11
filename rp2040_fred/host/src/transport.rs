@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use rp2040_fred_firmware::bridge_proto::{Packet, PACKET_SIZE};
 use rp2040_fred_firmware::bridge_service::BridgeService;
-use rusb::{Context, DeviceHandle, Direction, TransferType, UsbContext};
+use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
 
 pub trait HostTransport {
     fn transact(&mut self, req: Packet) -> io::Result<Vec<Packet>>;
@@ -42,7 +42,7 @@ pub struct UsbTransport {
 }
 
 impl UsbTransport {
-    pub fn open(vid: u16, pid: u16, if_num: u8) -> io::Result<Self> {
+    pub fn open(vid: u16, pid: u16) -> io::Result<Self> {
         let ctx = Context::new().map_err(io_other)?;
         let devices = ctx.devices().map_err(io_other)?;
 
@@ -55,27 +55,38 @@ impl UsbTransport {
             let config = device.active_config_descriptor().map_err(io_other)?;
             let mut in_ep = None;
             let mut out_ep = None;
+            let mut if_num = None;
 
             for interface in config.interfaces() {
                 for iface_desc in interface.descriptors() {
-                    if iface_desc.interface_number() != if_num {
-                        continue;
-                    }
+                    let candidate_if = iface_desc.interface_number();
+                    let mut candidate_in = None;
+                    let mut candidate_out = None;
 
                     for ep in iface_desc.endpoint_descriptors() {
                         if ep.transfer_type() != TransferType::Bulk {
                             continue;
                         }
                         match ep.direction() {
-                            Direction::In => in_ep = Some(ep.address()),
-                            Direction::Out => out_ep = Some(ep.address()),
+                            Direction::In => candidate_in = Some(ep.address()),
+                            Direction::Out => candidate_out = Some(ep.address()),
                         }
                     }
+
+                    if let (Some(i), Some(o)) = (candidate_in, candidate_out) {
+                        if_num = Some(candidate_if);
+                        in_ep = Some(i);
+                        out_ep = Some(o);
+                        break;
+                    }
+                }
+                if if_num.is_some() {
+                    break;
                 }
             }
 
-            let (in_ep, out_ep) = match (in_ep, out_ep) {
-                (Some(i), Some(o)) => (i, o),
+            let (if_num, in_ep, out_ep) = match (if_num, in_ep, out_ep) {
+                (Some(if_num), Some(i), Some(o)) => (if_num, i, o),
                 _ => continue,
             };
 
@@ -139,12 +150,15 @@ impl HostTransport for UsbTransport {
 
         let deadline = Instant::now() + Duration::from_millis(500);
         let mut replies = Vec::new();
+        let want_seq = req.seq;
 
         while Instant::now() < deadline {
             match self.read_packet() {
                 Ok(pkt) => {
+                    let done = matches!(pkt.msg_type, rp2040_fred_firmware::bridge_proto::MsgType::Ack | rp2040_fred_firmware::bridge_proto::MsgType::Nack)
+                        && pkt.seq == want_seq;
                     replies.push(pkt);
-                    if !replies.is_empty() {
+                    if done {
                         break;
                     }
                 }
@@ -164,8 +178,13 @@ impl HostTransport for UsbTransport {
     }
 }
 
-fn io_other<E: core::fmt::Display>(e: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e.to_string())
+fn io_other(e: UsbError) -> io::Error {
+    let kind = match e {
+        UsbError::Timeout => io::ErrorKind::TimedOut,
+        UsbError::NoDevice => io::ErrorKind::NotConnected,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, e.to_string())
 }
 
 #[cfg(test)]
