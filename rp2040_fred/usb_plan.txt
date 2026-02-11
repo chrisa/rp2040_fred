@@ -1,0 +1,217 @@
+RP2040 USB Bring-Up Plan (DRO Bridge)
+=====================================
+
+Goal
+- Add USB comms between host PC and RP2040 (Pico) so host software can:
+  - enable telemetry (`PLONKON` equivalent),
+  - disable telemetry (`PLONKOFF` equivalent),
+  - receive/interpret live X, Z, spindle speed.
+- Keep transport on USB bulk/control transfers (no isochronous).
+
+
+1) High-Level Architecture
+--------------------------
+
+On RP2040 firmware:
+- Existing 1MHz/FRED transport remains the lathe-side interface.
+- Add USB device interface (vendor-specific bulk IN/OUT endpoints).
+- Add bridge state machine:
+  - `telemetry_enabled` bool
+  - telemetry sample rate
+  - decoded DRO snapshot (raw X/Z counts, RPM, health counters)
+
+On host:
+- Rust CLI app using libusb bindings (`rusb`).
+- Sends control commands (telemetry on/off, ping, optional config).
+- Reads telemetry stream and renders values continuously.
+
+
+2) USB Device Shape (Firmware)
+------------------------------
+
+Device choice:
+- Vendor-specific interface, 2 endpoints:
+  - `EP OUT` (host->device commands), bulk
+  - `EP IN` (device->host telemetry/events), bulk
+- Endpoint packet size: 64 bytes (full-speed USB).
+
+Why:
+- Works with libusb/rusb directly.
+- Deterministic enough for telemetry and commands.
+- No dependency on OS serial drivers.
+
+
+3) Bridge Protocol (Host <-> RP2040)
+------------------------------------
+
+Framing:
+- Fixed-size packet: 32 bytes (little-endian).
+- One packet per command/telemetry frame.
+- Layout:
+  - `u8  magic` (`0xA5`)
+  - `u8  version` (`1`)
+  - `u8  msg_type`
+  - `u8  payload_len` (bytes used in payload area)
+  - `u16 seq`
+  - `u16 reserved`
+  - `u8  payload[20]`
+  - `u32 crc32` (over bytes 0..27)
+
+Host -> Device message types:
+- `0x01 PING`
+- `0x10 TELEMETRY_SET`
+  - payload: `u8 enable`, `u16 period_ms`
+- `0x11 UNIT_CFG`
+  - payload: `u8 units` (`0=metric`, `1=imperial`), optional for firmware-side formatting
+- `0x12 SNAPSHOT_REQ`
+
+Device -> Host message types:
+- `0x80 ACK`
+  - payload: `u8 acked_type`, `u8 status`
+- `0x81 NACK`
+  - payload: `u8 rejected_type`, `u8 reason`
+- `0x90 TELEMETRY`
+  - payload:
+    - `u32 tick`
+    - `i32 x_counts`
+    - `i32 z_counts`
+    - `u16 rpm`
+    - `u8 flags` (`bit0=enabled`, `bit1=bus_fault`)
+    - `u8 reserved`
+- `0x91 HEALTH`
+  - payload:
+    - `u32 tx_timeout_count`
+    - `u32 rx_timeout_count`
+    - `u32 bus_cycles`
+
+Policy:
+- Host sends `TELEMETRY_SET(enable=1)` for PLONKON equivalent.
+- Host sends `TELEMETRY_SET(enable=0)` for PLONKOFF equivalent.
+- Firmware sends telemetry frames only when enabled.
+- Optional heartbeat: firmware emits `HEALTH` every N telemetry frames.
+
+
+4) Firmware Task Structure (Embassy)
+------------------------------------
+
+Core tasks:
+1. `bus_task` (high priority)
+   - Runs FC80 cadence only when `telemetry_enabled`.
+   - Reads FCF0/FCF1.
+   - Updates raw telemetry state (X/Z/RPM + counters).
+
+2. `usb_rx_task`
+   - Reads OUT endpoint packets.
+   - Validates header/version/CRC.
+   - Applies commands to shared state.
+   - Emits ACK/NACK.
+
+3. `usb_tx_task`
+   - Periodically publishes `TELEMETRY` when enabled.
+   - Publishes `HEALTH` at slower interval.
+
+4. `watchdog/health_task` (optional)
+   - Maintains fault flags and timeout bookkeeping.
+
+Shared state:
+- `embassy_sync` signal/channel + mutex-protected state struct.
+- Keep packet encode/decode in a dedicated `bridge_proto` module.
+
+Integration points in current code:
+- `src/transport.rs`: source of bus timeout counters.
+- `src/protocol.rs`: source of decoded raw DRO values.
+- `src/main.rs`: split current monolithic loop into tasks.
+
+
+5) Host Rust Program Structure
+------------------------------
+
+Workspace addition:
+- `rp2040_fred/host/` with:
+  - `src/main.rs`
+  - `src/usb_transport.rs`
+  - `src/bridge_proto.rs`
+  - `src/dro_decode.rs`
+  - `src/ui.rs` (simple TUI/terminal output)
+
+CLI commands:
+- `fredctl on`
+  - opens USB device, sends `TELEMETRY_SET(enable=1)`, waits ACK.
+- `fredctl off`
+  - sends `TELEMETRY_SET(enable=0)`, waits ACK.
+- `fredctl monitor`
+  - enables telemetry (optional flag),
+  - reads `TELEMETRY` stream,
+  - prints live X/Z/RPM.
+
+USB layer (`rusb`):
+- Find by VID/PID and interface number.
+- Claim interface.
+- Bulk write commands to OUT endpoint.
+- Bulk read responses/events from IN endpoint.
+- Reconnect loop if timeout/disconnect.
+
+Display/convert layer:
+- Keep both raw counts and engineering units on-screen.
+- X/Z conversion configured by constants (initially aligned to CNCMAN behavior):
+  - X displayed using diameter semantics (`x_display = x_counts * 2`).
+  - Z displayed directly (`z_display = z_counts`).
+  - mm conversion uses configurable `counts_per_mm`.
+  - RPM from telemetry `rpm` directly.
+- Start with clearly-marked "calibration constants" in config.
+
+
+6) Implementation Phases
+------------------------
+
+Phase A: Shared protocol crate/module
+- Implement packet structs, encode/decode, CRC32, tests.
+- Add golden-vector tests for all message types.
+
+Phase B: Firmware USB skeleton
+- Enumerate USB interface/endpoints.
+- Implement PING + ACK path.
+- Add `TELEMETRY_SET` command handling.
+
+Phase C: Telemetry publish path
+- Publish `TELEMETRY` frames from live bus data.
+- Gate by `telemetry_enabled`.
+- Add `HEALTH` frame.
+
+Phase D: Host CLI
+- `on/off/monitor` commands.
+- Robust reconnect + timeout handling.
+- Live display with unit conversion.
+
+Phase E: Bring-up validation
+- Verify on/off command behavior against lathe.
+- Verify displayed X/Z/RPM against known machine state.
+- Capture and log packet traces for debugging.
+
+
+7) Testing Plan
+---------------
+
+Firmware-side tests:
+- Protocol encode/decode unit tests (host target).
+- Command parser tests (`TELEMETRY_SET`, invalid CRC, invalid version).
+
+Host-side tests:
+- Protocol roundtrip tests.
+- Decoder conversion tests (counts->mm, diameter logic).
+
+Integration tests:
+- Mock transport test mode:
+  - Use existing mock DRO generator data path.
+  - Feed mock frames through same USB protocol stack.
+  - Verify host monitor output updates correctly.
+
+
+8) Immediate Next Steps
+-----------------------
+
+1. Define final VID/PID/interface numbers and endpoint addresses.
+2. Implement `bridge_proto` packet codec + tests.
+3. Add USB enumeration + PING/ACK in firmware.
+4. Implement `fredctl on/off`.
+5. Implement `fredctl monitor` with live decoded display.

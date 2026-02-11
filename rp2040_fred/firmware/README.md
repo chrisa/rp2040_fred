@@ -9,6 +9,7 @@ Status
 - Uses `embassy-rp`.
 
 Current Behavior
+- `src/bridge_proto.rs` defines host<->RP2040 packet framing and CRC32 checks.
 - `src/protocol.rs` implements `FC80 -> (FCF0, FCF1)` logic for:
   - `03,02,01,00` (X sign + digits)
   - `07,06,05,04` (Z sign + digits)
