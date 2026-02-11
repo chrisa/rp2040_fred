@@ -165,12 +165,12 @@ impl Rp2040FredTransport {
 
     #[cfg(feature = "pio-real")]
     fn init_pio_real(&mut self, p: Peripherals) {
-        let write_program = pio_proc::pio_file!(
+        let write_program = pio::pio_file!(
             "../pio/fred_transport.pio",
             select_program("fred_bus_write"),
             options(max_program_size = 32)
         );
-        let read_program = pio_proc::pio_file!(
+        let read_program = pio::pio_file!(
             "../pio/fred_transport.pio",
             select_program("fred_bus_read"),
             options(max_program_size = 32)
