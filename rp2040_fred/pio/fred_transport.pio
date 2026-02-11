@@ -1,0 +1,78 @@
+; RP2040 PIO programs for BBC 1MHz-bus master transactions.
+;
+; Goal: RP2040 replaces BBC-side FRED accesses and actively drives bus signals.
+; Required driven signals:
+;   - A[7:0] (low address bus)
+;   - D[7:0] (shared bus; output on writes, input on reads)
+;   - 1MHZE clock
+;   - RnW
+;   - FRED_SEL_N (predecoded FRED select)
+;   - DATA_DIR, DATA_OE_N (external transceiver direction/enable)
+;
+; Note:
+; - Address high byte decode is external; only A0..A7 are driven by RP2040.
+; - FRED select is explicitly driven by RP2040 as requested.
+
+.program fred_bus_write
+; One write transaction per PULL.
+;
+; OSR input format:
+;   [7:0]   data
+;   [15:8]  addr_lo
+;
+; Config:
+;   out_base = D0 (GPIO0), contiguous 16-pin group:
+;     pins [7:0]   -> D0..D7
+;     pins [15:8]  -> A0..A7
+;   sideset pins (5):
+;     bit0 -> 1MHZE
+;     bit1 -> RnW      (0=write, 1=read)
+;     bit2 -> FRED_N   (0=selected, 1=inactive)
+;     bit3 -> DATA_DIR (1=RP2040->bus, 0=bus->RP2040)
+;     bit4 -> DATA_OE_N (0=enabled, 1=disabled)
+;
+; Timing is adjusted by SM clock divider + optional inserted NOPs.
+.side_set 5
+.wrap_target
+    pull block               side 0b11111 ; idle: deselected, read mode, transceiver disabled
+    out pins, 16             side 0b01111 ; D0..D7=data, A0..A7=addr_lo, drive enabled
+
+    ; Start write cycle: select FRED and assert write
+    nop                      side 0b01000 ; 1MHZE=0, RnW=0, FRED_N=0, dir=write, oe=enable
+    nop                      side 0b01000
+    nop                      side 0b01001 ; raise 1MHZE for active phase
+    nop                      side 0b01001
+
+    ; End cycle
+    nop                      side 0b11111 ; deselect and disable driver
+.wrap
+
+
+.program fred_bus_read
+; One read transaction per PULL/PUSH pair.
+;
+; TX (OSR) format:
+;   [7:0]   don't-care
+;   [15:8]  addr_lo
+;
+; RX push:
+;   [7:0] sampled data byte
+;
+; Config:
+;   out pins -> D0..D7 + A0..A7 contiguous group
+;   in_base  -> D0..D7
+;   sideset pins (5): same mapping as write.
+.side_set 5
+.wrap_target
+    pull block               side 0b11111 ; idle
+    out pins, 16             side 0b10111 ; put addr on A0..A7, keep driver disabled for reads
+
+    ; Start read cycle
+    nop                      side 0b10010 ; 1MHZE=0, RnW=1, FRED_N=0, dir=read, oe=disabled
+    nop                      side 0b10011 ; 1MHZE=1 active read phase
+    in pins, 8               side 0b10011 ; sample D0..D7
+    push block               side 0b10111
+
+    ; End cycle
+    nop                      side 0b11111 ; idle/deselect
+.wrap

@@ -1,0 +1,108 @@
+RP2040 FRED Emulation Plan (DRO-First)
+======================================
+
+Goal
+- Replace the legacy lathe interface path with an RP2040-based FRED bus device.
+- First milestone: support DRO/manual-mode telemetry (position + spindle speed) used by the existing ROM/BASIC stack.
+
+Scope For Milestone 1 (DRO)
+- Emulate the FRED register behavior needed by TCL202/CNCMAN:
+  - write command port at $FC80
+  - status/busy read port at $FCF0
+  - response-byte read port at $FCF1
+- Sustain BBC 1MHz bus timing with deterministic response latency.
+- Keep command/response semantics compatible with current ROM expectations.
+
+Known Protocol Baseline (from reverse engineering)
+- ROM event loop issues repeated command writes to $FC80.
+- ROM polls $FCF0 for ready/busy gating.
+- ROM reads response bytes from $FCF1 and decodes them into:
+  - X text at $0C9F (+/- plus digits)
+  - Z text at $0CA7 (+/- plus digits)
+  - speed display via command IDs 0D/0C display path
+- Telemetry command cadence includes: 03,02,01,00,07,06,05,04,0D,0C.
+
+Phase 0: Electrical/Bus Interface Definition
+- Confirm exact external signals presented on the target connector/backplane:
+  - address lines available to peripheral
+  - R/W, phase/enable clock, select/chip-select strobes
+  - data bus direction control expectations
+- Define level-shifting and bus transceiver strategy:
+  - RP2040 GPIO is not 5V tolerant; require proper buffering/translators.
+  - Use explicit bidirectional data-bus transceiver with direction + OE control.
+- Deliverable:
+  - pin map + schematic-level signal list + timing assumptions.
+
+Phase 1: PIO Transport Design (1MHz Bus)
+- Design PIO state machine(s) for cycle capture/service:
+  - Detect qualified bus cycles for target register window.
+  - On writes: sample address + data, push event to CPU.
+  - On reads: present data byte with guaranteed setup/hold relative to bus phase.
+- Recommended split:
+  - SM0: bus cycle monitor + qualifier (addr + R/W + strobe/phase)
+  - SM1: read-data drive timing (data bus output enable + byte output)
+- Add minimal register decode in firmware (or external decode if required for timing margin):
+  - FC80 write capture
+  - FCF0 read return
+  - FCF1 read return
+- Deliverable:
+  - PIO assembly + cycle timing budget (ns) proving margin at 1MHz bus.
+
+Phase 2: Rust Firmware Skeleton (Embassy + embassy-rp)
+- Project setup:
+  - embassy executor
+  - pio setup via embassy-rp PIO API
+  - interrupt-safe ring buffers for bus events
+- Core tasks:
+  - bus_task: drains PIO FIFO events, updates register model
+  - protocol_task: handles FC80 command stream, maintains FCF0/FCF1 behavior
+  - telemetry_task: produces X/Z/speed source values (initially synthetic/test)
+  - debug_task: UART/USB logging + command injection controls
+- Deliverable:
+  - firmware that responds on FC80/FCF0/FCF1 with deterministic behavior and logging.
+
+Phase 3: DRO Protocol Compatibility Layer
+- Implement command-response behavior for DRO-compatible updates:
+  - map command IDs in observed cadence to sign/digit payload bytes expected by ROM callback paths
+  - preserve status semantics used by ROM gate checks
+- Start with deterministic synthetic trajectory:
+  - slowly varying X/Z + speed
+  - configurable sign transitions and update rate
+- Deliverable:
+  - CNCMAN/CNCMAN-like display updates correctly using RP2040 source only.
+
+Phase 4: Validation + Instrumentation
+- Bench validation:
+  - logic analyzer captures of legacy device vs RP2040 for FC80/FCF0/FCF1 transactions
+  - measure read response latency and bus contention behavior
+- In-system validation on BBC:
+  - verify PLONKON/OFF lifecycle stability
+  - verify DRO fields stable over extended runtime
+- Add guardrails:
+  - watchdog, fault counters, bus-timeout counters, optional safe-idle mode
+- Deliverable:
+  - compatibility report and capture set.
+
+Phase 5: Prepare For Full G-code Path (post-DRO)
+- Reuse same transport for manufacturing/editor flows.
+- Implement packed block codec parity with ROM tooling:
+  - PLONKG/PLONKP-equivalent semantics if needed externally
+- Expand protocol engine beyond DRO command subset.
+
+Work Breakdown (Immediate Next Steps)
+1. Keep `mock-bus` loop as protocol regression harness (`cargo check` default).
+2. Validate the implemented `pio-real` init path for shared D0..D7 + A0..A7 and 5 control pins.
+3. Validate wired TX/RX FIFO cycles for FC80 write and FCF0/FCF1 read on hardware.
+4. Reproduce CNCMAN DRO cadence against live controller readback.
+5. Capture and compare waveforms against current hardware traces.
+
+Risks / Unknowns
+- Exact bus strobes available on chosen interface variant may differ; decode strategy depends on this.
+- Read-cycle timing margin may require some decode offload to simple glue logic.
+- Final mapping from DRO command IDs to semantic fields may need one more capture pass for perfect parity.
+
+Definition of Done (Milestone 1)
+- BBC software can run DRO/manual feedback mode against RP2040 hardware.
+- Position and speed fields update continuously and correctly on-screen.
+- No bus contention or instability during long soak run.
+- Captures show stable 1MHz timing margins with documented headroom.
