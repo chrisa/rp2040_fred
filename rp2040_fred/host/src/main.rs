@@ -5,8 +5,8 @@ use std::io;
 use std::thread;
 use std::time::Duration;
 
-use rp2040_fred_firmware::bridge_proto::{MsgType, Packet};
-use rp2040_fred_firmware::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
+use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
+use rp2040_fred_protocol::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
 use transport::{HostTransport, MockTransport, UsbTransport};
 
 fn main() -> io::Result<()> {
@@ -49,7 +49,11 @@ fn set_mock_telemetry(enable: bool) -> io::Result<()> {
     let mut t = MockTransport::new();
     let req = Packet::telemetry_set(1, enable, 100);
     let replies = t.transact(req)?;
-    println!("mock telemetry {} -> {} reply packet(s)", if enable { "ON" } else { "OFF" }, replies.len());
+    println!(
+        "mock telemetry {} -> {} reply packet(s)",
+        if enable { "ON" } else { "OFF" },
+        replies.len()
+    );
     Ok(())
 }
 
@@ -84,7 +88,11 @@ fn set_usb_telemetry(enable: bool) -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     let req = Packet::telemetry_set(1, enable, 100);
     let replies = t.transact(req)?;
-    println!("usb telemetry {} -> {} reply packet(s)", if enable { "ON" } else { "OFF" }, replies.len());
+    println!(
+        "usb telemetry {} -> {} reply packet(s)",
+        if enable { "ON" } else { "OFF" },
+        replies.len()
+    );
     Ok(())
 }
 

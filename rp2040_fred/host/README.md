@@ -3,7 +3,7 @@ fredctl (Host Bring-Up Tool)
 
 Status
 - Phase A complete:
-  - shared bridge packet protocol in firmware crate,
+  - shared bridge packet protocol in `rp2040-fred-protocol`,
   - firmware-side bridge service with request handling and telemetry event generation,
   - host CLI scaffold with command structure,
   - working `mock` monitor path that consumes real bridge `TELEMETRY` packets.
@@ -23,7 +23,7 @@ Notes
 - X display uses diameter semantics (`x_counts * 2`) to match CNCMAN behavior.
 - Z display uses direct axis counts.
 - Mock telemetry emits one packet per full 10-command DRO cadence.
-- Default USB target is `VID=0x2E8A`, `PID=0x000A`, interface `0`.
+- Default USB target is `VID=0x2E8A`, `PID=0x000A`, with the first bulk IN/OUT interface discovered at runtime.
 - Conversion constants currently default to:
   - `x_counts_per_mm = 100`
   - `z_counts_per_mm = 100`

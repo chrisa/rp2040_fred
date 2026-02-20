@@ -2,23 +2,19 @@ RP2040 FRED Firmware Scaffold
 =============================
 
 Status
-- DRO protocol core is implemented for command cadence and synthetic telemetry.
-- Transport supports two build modes:
-  - `mock-bus` (default): no hardware access, protocol/loop bring-up only.
-  - `pio-real`: loads and starts real PIO state machines for the shared D0..D7 bus model.
-- `usb-bridge` feature builds and exposes the bridge packet protocol over USB bulk endpoints.
-- Current `usb-bridge` telemetry source is still the internal mock cadence path; wiring to live `pio-real` FRED samples is next.
+- USB bridge is always enabled and exposed over bulk endpoints.
+- Shared bridge protocol logic lives in `../protocol` (`rp2040-fred-protocol`) so it can be tested on host targets.
+- Transport feature flags are retained:
+  - `mock-bus` (default): synthetic cadence-backed telemetry.
+  - `pio-real`: reserved for live PIO transport bring-up.
 - Uses `embassy-rp`.
 
 Current Behavior
-- `src/bridge_proto.rs` defines host<->RP2040 packet framing and CRC32 checks.
-- `src/bridge_service.rs` handles bridge requests (`PING`, `TELEMETRY_SET`, `SNAPSHOT_REQ`) and emits telemetry events.
-- `src/dro_decode.rs` reconstructs X/Z/RPM from FC80/FCF1 command-response stream.
-- `src/protocol.rs` implements `FC80 -> (FCF0, FCF1)` logic for:
-  - `03,02,01,00` (X sign + digits)
-  - `07,06,05,04` (Z sign + digits)
-  - `0D,0C` (speed digits path)
-- `src/main.rs` runs a 10-command telemetry cadence.
+- `../protocol/src/bridge_proto.rs` defines host<->RP2040 packet framing and CRC32 checks.
+- `../protocol/src/bridge_service.rs` handles bridge requests (`PING`, `TELEMETRY_SET`, `SNAPSHOT_REQ`) and emits telemetry events.
+- `../protocol/src/dro_decode.rs` reconstructs X/Z/RPM from FC80/FCF1 command-response stream.
+- `../protocol/src/protocol.rs` implements `FC80 -> (FCF0, FCF1)` logic for the DRO command cadence.
+- `src/main.rs` runs USB bridge request/telemetry handling.
 - `src/pins.rs` matches agreed shared-bus pin map.
 - Bus words are composed as:
   - `[15:8] = A0..A7`
@@ -28,13 +24,13 @@ Build
 - Default mock check:
   - `cargo check`
 - Real-transport scaffold check:
-  - `cargo check --no-default-features --features pio-real`
-- USB bridge firmware build:
+  - `cargo check --no-default-features --features pio-real,defmt-log`
+- Firmware build:
   - `cargo fw-build-usb`
-- USB bridge firmware flash+run over SWD (`probe-rs` runner):
+- Firmware flash+run over SWD (`probe-rs` runner):
   - `cargo fw-run-usb`
 - Host-side protocol tests:
-  - `cargo test --lib --target x86_64-unknown-linux-gnu`
+  - `cd ../protocol && cargo test`
 - Host-side mock bus trace:
   - `cargo run --example mock_bus --target x86_64-unknown-linux-gnu -- 30`
 

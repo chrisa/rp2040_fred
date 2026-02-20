@@ -1,0 +1,8 @@
+{
+    // "rust-analyzer.cargo.features": [
+    //     "mock-bus"
+    // ],
+    // "rust-analyzer.cargo.noDefaultFeatures": false,
+    // "rust-analyzer.cargo.target": "x86_64-unknown-linux-gnu",
+    "rust-analyzer.cfg.setTest": false
+}

@@ -1,4 +1,4 @@
-use rp2040_fred_firmware::mock_bus::MockBusRunner;
+use rp2040_fred_protocol::mock_bus::MockBusRunner;
 
 fn main() {
     let count = std::env::args()

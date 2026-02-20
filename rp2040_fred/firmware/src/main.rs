@@ -1,115 +1,186 @@
 #![no_std]
 #![no_main]
 
-#[cfg(not(feature = "usb-bridge"))]
-mod protocol;
-#[cfg(not(feature = "usb-bridge"))]
+#[cfg(feature = "pio-real")]
 mod pins;
-#[cfg(not(feature = "usb-bridge"))]
+#[cfg(feature = "pio-real")]
 mod transport;
 
-use embassy_executor::Spawner;
-#[cfg(feature = "defmt-log")]
 use defmt_rtt as _;
-#[cfg(feature = "defmt-log")]
-use panic_probe as _;
-#[cfg(not(feature = "defmt-log"))]
-use panic_halt as _;
-
-#[cfg(not(feature = "usb-bridge"))]
-use embassy_time::{Duration, Timer};
-#[cfg(not(feature = "usb-bridge"))]
-use crate::transport::Rp2040FredTransport;
-#[cfg(all(not(feature = "usb-bridge"), feature = "mock-bus"))]
-use crate::protocol::DroProtocolEngine;
-
-#[cfg(feature = "usb-bridge")]
+use embassy_executor::Spawner;
 use embassy_futures::join::join;
-#[cfg(feature = "usb-bridge")]
 use embassy_futures::select::{select, Either};
-#[cfg(feature = "usb-bridge")]
 use embassy_rp::{bind_interrupts, usb};
-#[cfg(feature = "usb-bridge")]
 use embassy_time::{Duration, Timer};
-#[cfg(feature = "usb-bridge")]
 use embassy_usb::class::cmsis_dap_v2::{CmsisDapV2Class, State as CmsisState};
-#[cfg(feature = "usb-bridge")]
 use embassy_usb::msos;
-#[cfg(feature = "usb-bridge")]
 use embassy_usb::{Builder, Config};
-#[cfg(feature = "usb-bridge")]
-use rp2040_fred_firmware::bridge_proto::{Packet, PACKET_SIZE};
-#[cfg(feature = "usb-bridge")]
-use rp2040_fred_firmware::bridge_service::BridgeService;
+use panic_probe as _;
+#[cfg(feature = "pio-real")]
+use rp2040_fred_protocol::bridge_proto::MsgType;
+use rp2040_fred_protocol::bridge_proto::{Packet, PACKET_SIZE};
+#[cfg(feature = "mock-bus")]
+use rp2040_fred_protocol::bridge_service::BridgeService;
+#[cfg(feature = "pio-real")]
+use rp2040_fred_protocol::dro_decode::{DroAssembler, DroSnapshot};
+use static_cell::StaticCell;
+#[cfg(feature = "pio-real")]
+use transport::Rp2040FredTransport;
 
-#[cfg(feature = "defmt-log")]
+#[cfg(not(feature = "defmt-log"))]
+compile_error!("defmt-log feature must be enabled");
+
+#[cfg(all(feature = "mock-bus", feature = "pio-real"))]
+compile_error!("Use either `mock-bus` or `pio-real`, not both.");
+
 macro_rules! log_info {
     ($($arg:tt)*) => {
         defmt::info!($($arg)*);
     };
 }
 
-#[cfg(not(feature = "defmt-log"))]
-macro_rules! log_info {
-    ($($arg:tt)*) => {};
-}
-
-#[cfg(feature = "defmt-log")]
 macro_rules! log_warn {
     ($($arg:tt)*) => {
         defmt::warn!($($arg)*);
     };
 }
 
-#[cfg(not(feature = "defmt-log"))]
-macro_rules! log_warn {
-    ($($arg:tt)*) => {};
+#[cfg(feature = "pio-real")]
+const DRO_CADENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
+
+#[cfg(feature = "pio-real")]
+const FLAG_ENABLED: u8 = 1 << 0;
+
+#[cfg(feature = "pio-real")]
+struct LiveBridge {
+    telemetry_enabled: bool,
+    telemetry_period_ms: u16,
+    tick: u32,
+    telemetry_seq: u16,
+    cadence_idx: usize,
+    dro: DroAssembler,
+    last_snapshot: DroSnapshot,
 }
 
-#[cfg(feature = "usb-bridge")]
+#[cfg(feature = "pio-real")]
+impl LiveBridge {
+    const fn new() -> Self {
+        Self {
+            telemetry_enabled: false,
+            telemetry_period_ms: 100,
+            tick: 0,
+            telemetry_seq: 1,
+            cadence_idx: 0,
+            dro: DroAssembler::new(),
+            last_snapshot: DroSnapshot {
+                x_counts: 0,
+                z_counts: 0,
+                rpm: 0,
+            },
+        }
+    }
+
+    fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+        match req.msg_type {
+            MsgType::Ping => {
+                out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
+                1
+            }
+            MsgType::TelemetrySet => {
+                if req.payload_len < 1 {
+                    out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 1);
+                    return 1;
+                }
+                self.telemetry_enabled = req.payload[0] != 0;
+                if req.payload_len >= 3 {
+                    self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
+                }
+                out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
+                1
+            }
+            MsgType::SnapshotReq => {
+                let s = self.last_snapshot;
+                out[0] = Packet::telemetry(
+                    req.seq,
+                    self.tick,
+                    s.x_counts,
+                    s.z_counts,
+                    s.rpm,
+                    self.flags(),
+                );
+                out[1] = Packet::ack(req.seq, MsgType::SnapshotReq, 0);
+                2
+            }
+            _ => {
+                out[0] = Packet::nack(req.seq, req.msg_type as u8, 0xFE);
+                1
+            }
+        }
+    }
+
+    fn poll_telemetry_event(&mut self, transport: &mut Rp2040FredTransport) -> Option<Packet> {
+        if !self.telemetry_enabled {
+            return None;
+        }
+
+        let cmd = DRO_CADENCE[self.cadence_idx];
+        self.cadence_idx = (self.cadence_idx + 1) % DRO_CADENCE.len();
+        transport.write_fc80(cmd);
+        let _status = transport.read_fcf0();
+        let response = transport.read_fcf1();
+
+        self.tick = self.tick.wrapping_add(1);
+        self.dro.on_fc80_fcf1(cmd, response);
+        if cmd != 0x0C {
+            return None;
+        }
+
+        self.last_snapshot = self.dro.snapshot();
+        let s = self.last_snapshot;
+        let pkt = Packet::telemetry(
+            self.telemetry_seq,
+            self.tick,
+            s.x_counts,
+            s.z_counts,
+            s.rpm,
+            self.flags(),
+        );
+        self.telemetry_seq = self.telemetry_seq.wrapping_add(1);
+        Some(pkt)
+    }
+
+    fn telemetry_period_ms(&self) -> u16 {
+        self.telemetry_period_ms
+    }
+
+    fn flags(&self) -> u8 {
+        if self.telemetry_enabled {
+            FLAG_ENABLED
+        } else {
+            0
+        }
+    }
+}
+
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<embassy_rp::peripherals::USB>;
 });
 
-#[cfg(not(feature = "usb-bridge"))]
-#[embassy_executor::main]
-async fn main(_spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
-
-    let mut transport = Rp2040FredTransport::new();
-    transport.init(p);
-
-    #[cfg(feature = "mock-bus")]
-    let mut engine = DroProtocolEngine::new();
-
-    const CADENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
-    let mut idx = 0usize;
-
-    loop {
-        let cmd = CADENCE[idx];
-        idx = (idx + 1) % CADENCE.len();
-
-        transport.write_fc80(cmd);
-
-        #[cfg(feature = "mock-bus")]
-        {
-            engine.step_telemetry();
-            let reply = engine.on_command(cmd);
-            transport.inject_mock_reply(reply);
-        }
-
-        let _status = transport.read_fcf0();
-        let _response = transport.read_fcf1();
-
-        Timer::after(Duration::from_micros(200)).await;
-    }
-}
-
-#[cfg(feature = "usb-bridge")]
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     log_info!("fw start: usb-bridge");
+
+    #[cfg(feature = "pio-real")]
+    let mut fred_transport = {
+        let mut transport = Rp2040FredTransport::new();
+        transport.init_pio_peripherals(
+            p.PIO0, p.PIN_0, p.PIN_1, p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7,
+            p.PIN_8, p.PIN_9, p.PIN_10, p.PIN_11, p.PIN_12, p.PIN_13, p.PIN_14, p.PIN_15, p.PIN_16,
+            p.PIN_17, p.PIN_20, p.PIN_27, p.PIN_28,
+        );
+        transport
+    };
 
     let driver = usb::Driver::new(p.USB, Irqs);
     log_info!("usb driver initialized");
@@ -121,27 +192,31 @@ async fn main(_spawner: Spawner) {
     usb_config.max_power = 100;
     usb_config.max_packet_size_0 = 64;
 
-    static mut CONFIG_DESCRIPTOR: [u8; 256] = [0; 256];
-    static mut BOS_DESCRIPTOR: [u8; 256] = [0; 256];
-    static mut MSOS_DESCRIPTOR: [u8; 256] = [0; 256];
-    static mut CONTROL_BUF: [u8; 128] = [0; 128];
-    static mut CMSIS_STATE: CmsisState = CmsisState::new();
+    static CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static MSOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static CONTROL_BUF: StaticCell<[u8; 128]> = StaticCell::new();
+    static CMSIS_STATE: StaticCell<CmsisState> = StaticCell::new();
 
     let mut builder = Builder::new(
         driver,
         usb_config,
-        unsafe { &mut CONFIG_DESCRIPTOR },
-        unsafe { &mut BOS_DESCRIPTOR },
-        unsafe { &mut MSOS_DESCRIPTOR },
-        unsafe { &mut CONTROL_BUF },
+        CONFIG_DESCRIPTOR.init([0; 256]),
+        BOS_DESCRIPTOR.init([0; 256]),
+        MSOS_DESCRIPTOR.init([0; 256]),
+        CONTROL_BUF.init([0; 128]),
     );
     builder.msos_descriptor(msos::windows_version::WIN10, 0x20);
 
-    let mut bridge_class = CmsisDapV2Class::new(&mut builder, unsafe { &mut CMSIS_STATE }, 64, false);
+    let mut bridge_class =
+        CmsisDapV2Class::new(&mut builder, CMSIS_STATE.init(CmsisState::new()), 64, false);
     let mut usb_device = builder.build();
     log_info!("usb descriptors built");
 
+    #[cfg(feature = "mock-bus")]
     let mut bridge = BridgeService::new();
+    #[cfg(feature = "pio-real")]
+    let mut bridge = LiveBridge::new();
 
     let usb_fut = usb_device.run();
     let bridge_fut = async {
@@ -189,7 +264,12 @@ async fn main(_spawner: Spawner) {
                     Either::Second(()) => {}
                 }
 
-                if let Some(pkt) = bridge.poll_telemetry_event() {
+                #[cfg(feature = "mock-bus")]
+                let telemetry_pkt = bridge.poll_telemetry_event();
+                #[cfg(feature = "pio-real")]
+                let telemetry_pkt = bridge.poll_telemetry_event(&mut fred_transport);
+
+                if let Some(pkt) = telemetry_pkt {
                     let encoded = pkt.encode();
                     if bridge_class.write_packet(&encoded).await.is_err() {
                         log_warn!("USB telemetry write failed; dropping connection");

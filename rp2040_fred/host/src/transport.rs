@@ -1,8 +1,8 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use rp2040_fred_firmware::bridge_proto::{Packet, PACKET_SIZE};
-use rp2040_fred_firmware::bridge_service::BridgeService;
+use rp2040_fred_protocol::bridge_proto::{Packet, PACKET_SIZE};
+use rp2040_fred_protocol::bridge_service::BridgeService;
 use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
 
 pub trait HostTransport {
@@ -125,7 +125,9 @@ impl UsbTransport {
 
         let mut raw = [0u8; PACKET_SIZE];
         raw.copy_from_slice(&buf[..PACKET_SIZE]);
-        Packet::decode(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e)))
+        Packet::decode(&raw).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e))
+        })
     }
 
     fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
@@ -155,8 +157,11 @@ impl HostTransport for UsbTransport {
         while Instant::now() < deadline {
             match self.read_packet() {
                 Ok(pkt) => {
-                    let done = matches!(pkt.msg_type, rp2040_fred_firmware::bridge_proto::MsgType::Ack | rp2040_fred_firmware::bridge_proto::MsgType::Nack)
-                        && pkt.seq == want_seq;
+                    let done = matches!(
+                        pkt.msg_type,
+                        rp2040_fred_protocol::bridge_proto::MsgType::Ack
+                            | rp2040_fred_protocol::bridge_proto::MsgType::Nack
+                    ) && pkt.seq == want_seq;
                     replies.push(pkt);
                     if done {
                         break;
@@ -190,7 +195,7 @@ fn io_other(e: UsbError) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::{HostTransport, MockTransport};
-    use rp2040_fred_firmware::bridge_proto::{MsgType, Packet};
+    use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 
     #[test]
     fn ping_ack_roundtrip() {

@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rp2040-fred-firmware = { path = "../firmware" }
+rp2040-fred-protocol = { path = "../protocol" }
 rusb = "0.9.4"

@@ -1,2 +1,4 @@
 firmware/target
 host/target
+protocol/target
+python/venv

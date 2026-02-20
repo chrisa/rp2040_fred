@@ -177,7 +177,9 @@ pub fn crc32_ieee(data: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{crc32_ieee, DecodeError, MsgType, Packet, PACKET_MAGIC, PACKET_SIZE, PROTOCOL_VERSION};
+    use super::{
+        crc32_ieee, DecodeError, MsgType, Packet, PACKET_MAGIC, PACKET_SIZE, PROTOCOL_VERSION,
+    };
 
     #[test]
     fn crc32_golden_vector() {

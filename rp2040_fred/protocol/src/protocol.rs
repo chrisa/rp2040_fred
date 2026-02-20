@@ -87,7 +87,11 @@ const fn abs24(v: i32) -> u32 {
 }
 
 const fn sign_byte(v: i32) -> u8 {
-    if v < 0 { 0x01 } else { 0x00 }
+    if v < 0 {
+        0x01
+    } else {
+        0x00
+    }
 }
 
 const fn byte2(v: u32) -> u8 {

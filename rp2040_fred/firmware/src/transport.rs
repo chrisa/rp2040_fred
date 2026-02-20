@@ -1,22 +1,28 @@
 #![allow(dead_code)]
 
+#[cfg(feature = "pio-real")]
+use embassy_rp::Peri;
+#[cfg(not(test))]
 use embassy_rp::Peripherals;
 
 #[cfg(feature = "pio-real")]
 use embassy_rp::gpio::Level;
 #[cfg(feature = "pio-real")]
-use rp_pac as pac;
-#[cfg(feature = "pio-real")]
-use embassy_rp::peripherals::PIO0;
+use embassy_rp::peripherals::{
+    PIN_0, PIN_1, PIN_10, PIN_11, PIN_12, PIN_13, PIN_14, PIN_15, PIN_16, PIN_17, PIN_2, PIN_20,
+    PIN_27, PIN_28, PIN_3, PIN_4, PIN_5, PIN_6, PIN_7, PIN_8, PIN_9, PIO0,
+};
 #[cfg(feature = "pio-real")]
 use embassy_rp::pio::{Config, Direction, InterruptHandler, Pio, ShiftConfig, ShiftDirection};
+#[cfg(feature = "pio-real")]
+use rp_pac as pac;
 
 #[cfg(feature = "pio-real")]
 use embassy_rp::bind_interrupts;
 
-#[cfg(feature = "mock-bus")]
-use crate::protocol::FredReply;
 use crate::pins::reg;
+#[cfg(feature = "mock-bus")]
+use rp2040_fred_protocol::protocol::FredReply;
 
 #[cfg(all(feature = "mock-bus", feature = "pio-real"))]
 compile_error!("Use either `mock-bus` or `pio-real`, not both.");
@@ -50,6 +56,7 @@ pub struct Rp2040FredTransport {
     initialized: bool,
 }
 
+#[cfg(not(test))]
 impl Rp2040FredTransport {
     pub const fn new() -> Self {
         Self {
@@ -165,6 +172,43 @@ impl Rp2040FredTransport {
 
     #[cfg(feature = "pio-real")]
     fn init_pio_real(&mut self, p: Peripherals) {
+        self.init_pio_peripherals(
+            p.PIO0, p.PIN_0, p.PIN_1, p.PIN_2, p.PIN_3, p.PIN_4, p.PIN_5, p.PIN_6, p.PIN_7,
+            p.PIN_8, p.PIN_9, p.PIN_10, p.PIN_11, p.PIN_12, p.PIN_13, p.PIN_14, p.PIN_15, p.PIN_16,
+            p.PIN_17, p.PIN_20, p.PIN_27, p.PIN_28,
+        );
+    }
+
+    #[cfg(feature = "pio-real")]
+    pub fn init_pio_peripherals(
+        &mut self,
+        pio0: Peri<'static, PIO0>,
+        pin_0: Peri<'static, PIN_0>,
+        pin_1: Peri<'static, PIN_1>,
+        pin_2: Peri<'static, PIN_2>,
+        pin_3: Peri<'static, PIN_3>,
+        pin_4: Peri<'static, PIN_4>,
+        pin_5: Peri<'static, PIN_5>,
+        pin_6: Peri<'static, PIN_6>,
+        pin_7: Peri<'static, PIN_7>,
+        pin_8: Peri<'static, PIN_8>,
+        pin_9: Peri<'static, PIN_9>,
+        pin_10: Peri<'static, PIN_10>,
+        pin_11: Peri<'static, PIN_11>,
+        pin_12: Peri<'static, PIN_12>,
+        pin_13: Peri<'static, PIN_13>,
+        pin_14: Peri<'static, PIN_14>,
+        pin_15: Peri<'static, PIN_15>,
+        pin_16: Peri<'static, PIN_16>,
+        pin_17: Peri<'static, PIN_17>,
+        pin_20: Peri<'static, PIN_20>,
+        pin_27: Peri<'static, PIN_27>,
+        pin_28: Peri<'static, PIN_28>,
+    ) {
+        if self.initialized {
+            return;
+        }
+
         let write_program = pio::pio_file!(
             "../pio/fred_transport.pio",
             select_program("fred_bus_write"),
@@ -176,36 +220,36 @@ impl Rp2040FredTransport {
             options(max_program_size = 32)
         );
 
-        let mut pio = Pio::new(p.PIO0, Irqs);
+        let mut pio = Pio::new(pio0, Irqs);
 
         let loaded_write = pio.common.load_program(&write_program.program);
         let loaded_read = pio.common.load_program(&read_program.program);
 
         // Shared data bus D0..D7 and low address bus A0..A7.
-        let d0 = pio.common.make_pio_pin(p.PIN_0);
-        let d1 = pio.common.make_pio_pin(p.PIN_1);
-        let d2 = pio.common.make_pio_pin(p.PIN_2);
-        let d3 = pio.common.make_pio_pin(p.PIN_3);
-        let d4 = pio.common.make_pio_pin(p.PIN_4);
-        let d5 = pio.common.make_pio_pin(p.PIN_5);
-        let d6 = pio.common.make_pio_pin(p.PIN_6);
-        let d7 = pio.common.make_pio_pin(p.PIN_7);
+        let d0 = pio.common.make_pio_pin(pin_0);
+        let d1 = pio.common.make_pio_pin(pin_1);
+        let d2 = pio.common.make_pio_pin(pin_2);
+        let d3 = pio.common.make_pio_pin(pin_3);
+        let d4 = pio.common.make_pio_pin(pin_4);
+        let d5 = pio.common.make_pio_pin(pin_5);
+        let d6 = pio.common.make_pio_pin(pin_6);
+        let d7 = pio.common.make_pio_pin(pin_7);
 
-        let a0 = pio.common.make_pio_pin(p.PIN_8);
-        let a1 = pio.common.make_pio_pin(p.PIN_9);
-        let a2 = pio.common.make_pio_pin(p.PIN_10);
-        let a3 = pio.common.make_pio_pin(p.PIN_11);
-        let a4 = pio.common.make_pio_pin(p.PIN_12);
-        let a5 = pio.common.make_pio_pin(p.PIN_13);
-        let a6 = pio.common.make_pio_pin(p.PIN_14);
-        let a7 = pio.common.make_pio_pin(p.PIN_15);
+        let a0 = pio.common.make_pio_pin(pin_8);
+        let a1 = pio.common.make_pio_pin(pin_9);
+        let a2 = pio.common.make_pio_pin(pin_10);
+        let a3 = pio.common.make_pio_pin(pin_11);
+        let a4 = pio.common.make_pio_pin(pin_12);
+        let a5 = pio.common.make_pio_pin(pin_13);
+        let a6 = pio.common.make_pio_pin(pin_14);
+        let a7 = pio.common.make_pio_pin(pin_15);
 
         // Control lines (sideset order must match PIO source).
-        let rnw = pio.common.make_pio_pin(p.PIN_16);
-        let mhz1e = pio.common.make_pio_pin(p.PIN_17);
-        let fred_n = pio.common.make_pio_pin(p.PIN_20);
-        let data_dir = pio.common.make_pio_pin(p.PIN_27);
-        let data_oe_n = pio.common.make_pio_pin(p.PIN_28);
+        let rnw = pio.common.make_pio_pin(pin_16);
+        let mhz1e = pio.common.make_pio_pin(pin_17);
+        let fred_n = pio.common.make_pio_pin(pin_20);
+        let data_dir = pio.common.make_pio_pin(pin_27);
+        let data_oe_n = pio.common.make_pio_pin(pin_28);
 
         let bus_out_pins = [
             &d0, &d1, &d2, &d3, &d4, &d5, &d6, &d7, &a0, &a1, &a2, &a3, &a4, &a5, &a6, &a7,
@@ -260,6 +304,7 @@ impl Rp2040FredTransport {
 
         // Keep PIO ownership for the life of the firmware so state machines remain configured.
         core::mem::forget(pio);
+        self.initialized = true;
     }
 }
 
