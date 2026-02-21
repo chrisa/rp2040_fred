@@ -34,4 +34,13 @@ client.disable_polling()
 client.close()
 ```
 
+`enable_polling()` now sends `CAPTURE_SET=0` first, because firmware powers up in passive capture mode.
+
+You can toggle capture explicitly:
+
+```python
+client.enable_capture()
+client.disable_capture()
+```
+
 `refresh()` drains any pending telemetry packets and returns the latest snapshot.

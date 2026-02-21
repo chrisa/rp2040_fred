@@ -17,6 +17,7 @@ defmt-log = [
 ]
 
 [dependencies]
+assign-resources = "0.5.0"
 rp2040-fred-protocol = { path = "../protocol" }
 
 [target.'cfg(target_arch = "arm")'.dependencies]

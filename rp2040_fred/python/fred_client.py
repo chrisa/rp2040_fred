@@ -23,6 +23,7 @@ PAYLOAD_SIZE = 20
 MSG_PING = 0x01
 MSG_TELEMETRY_SET = 0x10
 MSG_SNAPSHOT_REQ = 0x12
+MSG_CAPTURE_SET = 0x13
 MSG_ACK = 0x80
 MSG_NACK = 0x81
 MSG_TELEMETRY = 0x90
@@ -149,12 +150,19 @@ class FredUsbClient:
         self.close()
 
     def enable_polling(self, period_ms: int = 25) -> None:
+        self.disable_capture()
         payload = struct.pack("<BH", 1, int(period_ms) & 0xFFFF)
         self._transact(MSG_TELEMETRY_SET, payload)
 
     def disable_polling(self) -> None:
         payload = struct.pack("<BH", 0, 0)
         self._transact(MSG_TELEMETRY_SET, payload)
+
+    def enable_capture(self) -> None:
+        self._transact(MSG_CAPTURE_SET, b"\x01")
+
+    def disable_capture(self) -> None:
+        self._transact(MSG_CAPTURE_SET, b"\x00")
 
     def refresh(self) -> Dict[str, object]:
         """Drain pending USB telemetry and return latest snapshot.

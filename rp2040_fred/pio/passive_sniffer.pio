@@ -1,0 +1,33 @@
+; Passive bus sniffer for BBC 1MHz bus.
+;
+; Captures GPIO[20:0] whenever FRED_N is low and 1MHZE rises.
+; Expected pin mapping in captured word:
+;   bits [7:0]   -> D0..D7
+;   bits [15:8]  -> A0..A7
+;   bit 16       -> RnW
+;   bit 17       -> 1MHZE
+;   bit 18       -> spare
+;   bit 19       -> spare
+;   bit 20       -> FRED_N
+;
+; Program waits for FRED_N to assert, then samples on each 1MHZE edge
+; (rising and falling) so timing can be reconstructed offline.
+; `jmp pin` must be configured to FRED_N.
+
+.program fred_passive_sniffer
+.wrap_target
+wait_fred:
+    wait 0 pin 20
+sample_loop:
+    wait 1 pin 17
+    mov isr, null
+    in pins, 21
+    push block
+    jmp pin wait_fred
+    wait 0 pin 17
+    mov isr, null
+    in pins, 21
+    push block
+    jmp pin wait_fred
+    jmp sample_loop
+.wrap

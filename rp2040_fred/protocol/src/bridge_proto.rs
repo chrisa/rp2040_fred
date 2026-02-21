@@ -12,10 +12,12 @@ pub enum MsgType {
     TelemetrySet = 0x10,
     UnitCfg = 0x11,
     SnapshotReq = 0x12,
+    CaptureSet = 0x13,
     Ack = 0x80,
     Nack = 0x81,
     Telemetry = 0x90,
     Health = 0x91,
+    TraceSample = 0x92,
 }
 
 impl MsgType {
@@ -25,10 +27,12 @@ impl MsgType {
             0x10 => Some(Self::TelemetrySet),
             0x11 => Some(Self::UnitCfg),
             0x12 => Some(Self::SnapshotReq),
+            0x13 => Some(Self::CaptureSet),
             0x80 => Some(Self::Ack),
             0x81 => Some(Self::Nack),
             0x90 => Some(Self::Telemetry),
             0x91 => Some(Self::Health),
+            0x92 => Some(Self::TraceSample),
             _ => None,
         }
     }
@@ -123,6 +127,11 @@ impl Packet {
         Self::new(MsgType::TelemetrySet, seq, &payload).expect("valid telemetry_set")
     }
 
+    pub fn capture_set(seq: u16, enable: bool) -> Self {
+        let payload = [enable as u8];
+        Self::new(MsgType::CaptureSet, seq, &payload).expect("valid capture_set")
+    }
+
     pub fn ack(seq: u16, acked_type: MsgType, status: u8) -> Self {
         let payload = [acked_type as u8, status];
         Self::new(MsgType::Ack, seq, &payload).expect("valid ack")
@@ -157,6 +166,13 @@ impl Packet {
         payload[4..8].copy_from_slice(&rx_timeout_count.to_le_bytes());
         payload[8..12].copy_from_slice(&bus_cycles.to_le_bytes());
         Self::new(MsgType::Health, seq, &payload).expect("valid health")
+    }
+
+    pub fn trace_sample(seq: u16, tick: u32, sample_bits: u32) -> Self {
+        let mut payload = [0u8; 8];
+        payload[0..4].copy_from_slice(&tick.to_le_bytes());
+        payload[4..8].copy_from_slice(&sample_bits.to_le_bytes());
+        Self::new(MsgType::TraceSample, seq, &payload).expect("valid trace sample")
     }
 }
 
@@ -211,6 +227,26 @@ mod tests {
         assert_eq!(i32::from_le_bytes([p[8], p[9], p[10], p[11]]), 54321);
         assert_eq!(u16::from_le_bytes([p[12], p[13]]), 1800);
         assert_eq!(p[14], 0x03);
+    }
+
+    #[test]
+    fn capture_and_trace_roundtrip() {
+        let capture = Packet::capture_set(0x22, true);
+        let capture_raw = capture.encode();
+        let capture_got = Packet::decode(&capture_raw).expect("decode capture");
+        assert_eq!(capture_got.msg_type, MsgType::CaptureSet);
+        assert_eq!(capture_got.seq, 0x22);
+        assert_eq!(capture_got.payload_used(), &[1]);
+
+        let trace = Packet::trace_sample(0x33, 0x0102_0304, 0xA5A5_5A5A);
+        let trace_raw = trace.encode();
+        let trace_got = Packet::decode(&trace_raw).expect("decode trace");
+        assert_eq!(trace_got.msg_type, MsgType::TraceSample);
+        assert_eq!(trace_got.seq, 0x33);
+        assert_eq!(trace_got.payload_len, 8);
+        let p = trace_got.payload_used();
+        assert_eq!(u32::from_le_bytes([p[0], p[1], p[2], p[3]]), 0x0102_0304);
+        assert_eq!(u32::from_le_bytes([p[4], p[5], p[6], p[7]]), 0xA5A5_5A5A);
     }
 
     #[test]
