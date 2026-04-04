@@ -2,3 +2,4 @@ firmware/target
 host/target
 protocol/target
 python/venv
+python/__pycache__

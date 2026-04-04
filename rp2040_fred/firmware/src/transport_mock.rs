@@ -1,4 +1,5 @@
 use crate::resources::SnifferResources;
+use embassy_executor::Spawner;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 use rp2040_fred_protocol::bridge_service::BridgeService;
 
@@ -8,7 +9,7 @@ pub struct BridgeTransport {
 }
 
 impl BridgeTransport {
-    pub fn new(_sniffer: SnifferResources) -> Self {
+    pub fn new(_spawner: &Spawner, _sniffer: SnifferResources) -> Self {
         Self {
             bridge: BridgeService::new(),
             capture_enabled: true,
@@ -55,5 +56,9 @@ impl BridgeTransport {
         } else {
             Some(self.bridge.telemetry_period_ms().max(1) as u64)
         }
+    }
+
+    pub fn has_outgoing_backlog(&self) -> bool {
+        false
     }
 }

@@ -1,31 +1,50 @@
+use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::PIO0;
-use embassy_rp::pio::{Config, Direction, InterruptHandler, Pio, ShiftConfig, ShiftDirection};
-use rp_pac as pac;
+use embassy_rp::pio::{
+    Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
+};
+use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
+use heapless::spsc::{Consumer, Producer, Queue};
+use portable_atomic::{AtomicBool, Ordering};
+use static_cell::StaticCell;
 
 use crate::resources::SnifferResources;
-use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
+use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
+
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        defmt::info!($($arg)*);
+    };
+}
 
 bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
+const TRACE_SAMPLE_RING_LEN: usize = 2048;
+static TRACE_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(true);
+static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
+
 pub struct BridgeTransport {
-    sniffer: PassiveSniffer,
+    trace_samples: Consumer<'static, u32>,
     capture_enabled: bool,
     trace_seq: u16,
-    trace_tick: u32,
 }
 
 impl BridgeTransport {
-    pub fn new(sniffer_resources: SnifferResources) -> Self {
-        let mut sniffer = PassiveSniffer::new();
-        sniffer.init(sniffer_resources);
+    pub fn new(spawner: &Spawner, sniffer_resources: SnifferResources) -> Self {
+        let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
+        let (producer, consumer) = trace_ring.split();
+
+        TRACE_CAPTURE_ENABLED.store(true, Ordering::Relaxed);
+        spawner
+            .spawn(pio_capture_task(sniffer_resources, producer).expect("create pio capture task"));
+
         Self {
-            sniffer,
+            trace_samples: consumer,
             capture_enabled: true,
             trace_seq: 1,
-            trace_tick: 0,
         }
     }
 
@@ -40,6 +59,8 @@ impl BridgeTransport {
                     out[0] = Packet::nack(req.seq, MsgType::CaptureSet as u8, 1);
                 } else {
                     self.capture_enabled = req.payload[0] != 0;
+                    TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
+                    self.clear_trace_samples();
                     out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
                 }
                 1
@@ -56,106 +77,127 @@ impl BridgeTransport {
     }
 
     pub fn poll_outgoing_packet(&mut self) -> Option<Packet> {
-        if !self.capture_enabled {
+        if !self.capture_enabled || !self.trace_samples.ready() {
             return None;
         }
 
-        let sample = self.sniffer.poll_sample()?;
-        let pkt = Packet::trace_sample(self.trace_seq, self.trace_tick, sample);
+        let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
+        let mut used = 0usize;
+
+        while used < batch.len() {
+            let Some(sample) = self.trace_samples.dequeue() else {
+                break;
+            };
+            batch[used] = sample;
+            used += 1;
+        }
+
+        if used == 0 {
+            return None;
+        }
+
+        let pkt = Packet::trace_samples(self.trace_seq, &batch[..used]);
         self.trace_seq = self.trace_seq.wrapping_add(1);
-        self.trace_tick = self.trace_tick.wrapping_add(1);
         Some(pkt)
     }
 
     pub fn post_send_delay_ms(&self, _pkt: &Packet) -> Option<u64> {
         None
     }
-}
 
-struct PassiveSniffer {
-    initialized: bool,
-}
-
-impl PassiveSniffer {
-    const fn new() -> Self {
-        Self { initialized: false }
+    pub fn has_outgoing_backlog(&self) -> bool {
+        self.capture_enabled && self.trace_samples.ready()
     }
 
-    fn init(&mut self, r: SnifferResources) {
-        if self.initialized {
-            return;
+    fn clear_trace_samples(&mut self) {
+        while self.trace_samples.dequeue().is_some() {}
+    }
+}
+
+#[embassy_executor::task]
+async fn pio_capture_task(
+    sniffer_resources: SnifferResources,
+    mut trace_samples: Producer<'static, u32>,
+) {
+    let program = pio::pio_file!(
+        "../pio/passive_sniffer.pio",
+        select_program("fred_passive_sniffer"),
+        options(max_program_size = 32)
+    );
+
+    let mut pio = Pio::new(sniffer_resources.pio0, PioIrqs);
+
+    let loaded = pio.common.load_program(&program.program);
+
+    let p0 = pio.common.make_pio_pin(sniffer_resources.pin_0);
+    let p1 = pio.common.make_pio_pin(sniffer_resources.pin_1);
+    let p2 = pio.common.make_pio_pin(sniffer_resources.pin_2);
+    let p3 = pio.common.make_pio_pin(sniffer_resources.pin_3);
+    let p4 = pio.common.make_pio_pin(sniffer_resources.pin_4);
+    let p5 = pio.common.make_pio_pin(sniffer_resources.pin_5);
+    let p6 = pio.common.make_pio_pin(sniffer_resources.pin_6);
+    let p7 = pio.common.make_pio_pin(sniffer_resources.pin_7);
+    let p8 = pio.common.make_pio_pin(sniffer_resources.pin_8);
+    let p9 = pio.common.make_pio_pin(sniffer_resources.pin_9);
+    let p10 = pio.common.make_pio_pin(sniffer_resources.pin_10);
+    let p11 = pio.common.make_pio_pin(sniffer_resources.pin_11);
+    let p12 = pio.common.make_pio_pin(sniffer_resources.pin_12);
+    let p13 = pio.common.make_pio_pin(sniffer_resources.pin_13);
+    let p14 = pio.common.make_pio_pin(sniffer_resources.pin_14);
+    let p15 = pio.common.make_pio_pin(sniffer_resources.pin_15);
+    let p16 = pio.common.make_pio_pin(sniffer_resources.pin_16);
+    let p17 = pio.common.make_pio_pin(sniffer_resources.pin_17);
+    let p20 = pio.common.make_pio_pin(sniffer_resources.pin_20);
+    let p28 = pio.common.make_pio_pin(sniffer_resources.pin_28);
+
+    let in_pins = [
+        &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, // data bus
+        &p8, &p9, &p10, &p11, &p12, &p13, &p14, &p15, // addr bus
+        &p16, // RnW
+        &p17, // 1MHz
+    ];
+
+    let mut cfg = Config::default();
+    cfg.use_program(&loaded, &[&p28]);
+    cfg.set_in_pins(&in_pins);
+    cfg.set_jmp_pin(&p20);
+    cfg.shift_in = ShiftConfig {
+        threshold: 32,
+        direction: ShiftDirection::Left,
+        auto_fill: false,
+    };
+    cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
+
+    pio.sm2.set_config(&cfg);
+    pio.sm2.set_pin_dirs(Direction::In, &in_pins);
+    pio.sm2.set_pin_dirs(Direction::Out, &[&p28]);
+    pio.sm2.clear_fifos();
+
+    let mut batch = PioBatch::new();
+    batch.restart(&mut pio.sm2);
+    batch.set_enable(&mut pio.sm2, true);
+    batch.execute();
+
+    log_info!("PIO initialised");
+
+    loop {
+        let raw_sample = pio.sm2.rx().wait_pull().await;
+
+        if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
+            continue;
         }
 
-        let program = pio::pio_file!(
-            "../pio/passive_sniffer.pio",
-            select_program("fred_passive_sniffer"),
-            options(max_program_size = 32)
-        );
+        let sample = encode_trace_sample(raw_sample);
 
-        let mut pio = Pio::new(r.pio0, PioIrqs);
-        let loaded = pio.common.load_program(&program.program);
-
-        let p0 = pio.common.make_pio_pin(r.pin_0);
-        let p1 = pio.common.make_pio_pin(r.pin_1);
-        let p2 = pio.common.make_pio_pin(r.pin_2);
-        let p3 = pio.common.make_pio_pin(r.pin_3);
-        let p4 = pio.common.make_pio_pin(r.pin_4);
-        let p5 = pio.common.make_pio_pin(r.pin_5);
-        let p6 = pio.common.make_pio_pin(r.pin_6);
-        let p7 = pio.common.make_pio_pin(r.pin_7);
-        let p8 = pio.common.make_pio_pin(r.pin_8);
-        let p9 = pio.common.make_pio_pin(r.pin_9);
-        let p10 = pio.common.make_pio_pin(r.pin_10);
-        let p11 = pio.common.make_pio_pin(r.pin_11);
-        let p12 = pio.common.make_pio_pin(r.pin_12);
-        let p13 = pio.common.make_pio_pin(r.pin_13);
-        let p14 = pio.common.make_pio_pin(r.pin_14);
-        let p15 = pio.common.make_pio_pin(r.pin_15);
-        let p16 = pio.common.make_pio_pin(r.pin_16);
-        let p17 = pio.common.make_pio_pin(r.pin_17);
-        let p18 = pio.common.make_pio_pin(r.pin_18);
-        let p19 = pio.common.make_pio_pin(r.pin_19);
-        let p20 = pio.common.make_pio_pin(r.pin_20);
-
-        let in_pins = [
-            &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, &p8, &p9, &p10, &p11, &p12, &p13, &p14, &p15,
-            &p16, &p17, &p18, &p19, &p20,
-        ];
-
-        let mut cfg = Config::default();
-        cfg.use_program(&loaded, &[]);
-        cfg.set_in_pins(&in_pins);
-        cfg.set_jmp_pin(&p20);
-        cfg.shift_in = ShiftConfig {
-            threshold: 32,
-            direction: ShiftDirection::Right,
-            auto_fill: false,
-        };
-
-        pio.sm2.set_config(&cfg);
-        pio.sm2.set_pin_dirs(Direction::In, &in_pins);
-        pio.sm2.clear_fifos();
-
-        pio.common.apply_sm_batch(|batch| {
-            batch.restart(&mut pio.sm2);
-            batch.set_enable(&mut pio.sm2, true);
-        });
-
-        core::mem::forget(pio);
-        self.initialized = true;
-    }
-
-    #[inline]
-    fn poll_sample(&mut self) -> Option<u32> {
-        pio0_rx_pull(2)
+        // Drop the newest sample on overflow, but keep draining the RX FIFO so
+        // the PIO state machine can continue running.
+        let _ = trace_samples.enqueue(sample);
     }
 }
 
 #[inline]
-fn pio0_rx_pull(sm: usize) -> Option<u32> {
-    let rxempty_mask = 1u8 << sm;
-    if pac::PIO0.fstat().read().rxempty() & rxempty_mask != 0 {
-        return None;
-    }
-    Some(pac::PIO0.rxf(sm).read())
+fn encode_trace_sample(raw_sample: u32) -> u32 {
+    // The non-consecutive hardware map keeps bus bits on GPIO0..17 and uses
+    // GPIO20 for FRED_N, leaving GPIO18/19 intentionally unused.
+    raw_sample
 }

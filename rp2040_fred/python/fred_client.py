@@ -10,7 +10,7 @@ from __future__ import annotations
 import binascii
 import struct
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import usb.core
 import usb.util
@@ -27,6 +27,7 @@ MSG_CAPTURE_SET = 0x13
 MSG_ACK = 0x80
 MSG_NACK = 0x81
 MSG_TELEMETRY = 0x90
+MSG_TRACE_SAMPLE = 0x92
 
 
 class FredProtocolError(RuntimeError):
@@ -123,6 +124,7 @@ class FredUsbClient:
             "tick": 0,
             "flags": 0,
         }
+        self._pending_capture_samples: List[int] = []
 
         self._open()
 
@@ -179,8 +181,26 @@ class FredUsbClient:
                 break
             if pkt.msg_type == MSG_TELEMETRY and len(pkt.payload) >= 16:
                 self._consume_telemetry(pkt)
+            elif pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= 4:
+                self._pending_capture_samples.extend(self._decode_trace_samples(pkt))
 
         return dict(self._latest)
+
+    def read_capture_samples(self, timeout_ms: int = 1) -> List[int]:
+        """Drain pending capture traffic and return decoded raw samples."""
+        samples = self._drain_pending_capture_samples()
+
+        while True:
+            pkt = self._read_packet(timeout_ms=timeout_ms)
+            if pkt is None:
+                break
+
+            if pkt.msg_type == MSG_TELEMETRY and len(pkt.payload) >= 16:
+                self._consume_telemetry(pkt)
+            elif pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= 4:
+                samples.extend(self._decode_trace_samples(pkt))
+
+        return samples
 
     def _open(self) -> None:
         dev = usb.core.find(idVendor=self.vid, idProduct=self.pid)
@@ -248,6 +268,9 @@ class FredUsbClient:
             if pkt.msg_type == MSG_TELEMETRY and len(pkt.payload) >= 16:
                 self._consume_telemetry(pkt)
                 continue
+            if pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= 4:
+                self._pending_capture_samples.extend(self._decode_trace_samples(pkt))
+                continue
 
             if pkt.seq != seq:
                 continue
@@ -280,6 +303,17 @@ class FredUsbClient:
                 "flags": int(flags),
             }
         )
+
+    def _decode_trace_samples(self, pkt: _Packet) -> List[int]:
+        samples: List[int] = []
+        for offset in range(0, len(pkt.payload) - (len(pkt.payload) % 4), 4):
+            samples.append(struct.unpack_from("<I", pkt.payload, offset)[0])
+        return samples
+
+    def _drain_pending_capture_samples(self) -> List[int]:
+        samples = list(self._pending_capture_samples)
+        self._pending_capture_samples.clear()
+        return samples
 
     def _write_packet(self, pkt: _Packet) -> None:
         if self._dev is None or self._ep_out is None:

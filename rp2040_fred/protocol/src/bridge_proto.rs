@@ -4,6 +4,7 @@ pub const PACKET_MAGIC: u8 = 0xA5;
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const PACKET_SIZE: usize = 32;
 pub const PAYLOAD_SIZE: usize = 20;
+pub const TRACE_SAMPLES_PER_PACKET: usize = PAYLOAD_SIZE / core::mem::size_of::<u32>();
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,11 +169,22 @@ impl Packet {
         Self::new(MsgType::Health, seq, &payload).expect("valid health")
     }
 
-    pub fn trace_sample(seq: u16, tick: u32, sample_bits: u32) -> Self {
-        let mut payload = [0u8; 8];
-        payload[0..4].copy_from_slice(&tick.to_le_bytes());
-        payload[4..8].copy_from_slice(&sample_bits.to_le_bytes());
-        Self::new(MsgType::TraceSample, seq, &payload).expect("valid trace sample")
+    pub fn trace_samples(seq: u16, samples: &[u32]) -> Self {
+        assert!(samples.len() <= TRACE_SAMPLES_PER_PACKET);
+
+        let mut payload = [0u8; PAYLOAD_SIZE];
+        let mut used = 0usize;
+
+        for sample in samples {
+            payload[used..used + 4].copy_from_slice(&sample.to_le_bytes());
+            used += 4;
+        }
+
+        Self::new(MsgType::TraceSample, seq, &payload[..used]).expect("valid trace samples")
+    }
+
+    pub fn trace_sample(seq: u16, sample_bits: u32) -> Self {
+        Self::trace_samples(seq, core::slice::from_ref(&sample_bits))
     }
 }
 
@@ -238,7 +250,7 @@ mod tests {
         assert_eq!(capture_got.seq, 0x22);
         assert_eq!(capture_got.payload_used(), &[1]);
 
-        let trace = Packet::trace_sample(0x33, 0x0102_0304, 0xA5A5_5A5A);
+        let trace = Packet::trace_samples(0x33, &[0x0102_0304, 0xA5A5_5A5A]);
         let trace_raw = trace.encode();
         let trace_got = Packet::decode(&trace_raw).expect("decode trace");
         assert_eq!(trace_got.msg_type, MsgType::TraceSample);

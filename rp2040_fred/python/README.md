@@ -40,7 +40,11 @@ You can toggle capture explicitly:
 
 ```python
 client.enable_capture()
+samples = client.read_capture_samples(timeout_ms=50)
+print([f"0x{sample:08X}" for sample in samples])
 client.disable_capture()
 ```
 
 `refresh()` drains any pending telemetry packets and returns the latest snapshot.
+If trace packets arrive while you are polling or performing control transactions,
+the client keeps them buffered so `read_capture_samples()` can return them later.

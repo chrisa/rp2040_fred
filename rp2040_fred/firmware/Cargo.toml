@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["defmt-log", "mock-bus"]
+default = ["defmt-log", "pio-real"]
 mock-bus = []
 pio-real = []
 defmt-log = [
@@ -27,12 +27,13 @@ panic-probe = { version = "=1.0.0", features = ["print-defmt"], optional = true 
 defmt = { version = "=1.0.1", optional = true }
 defmt-rtt = { version = "=1.0.0", optional = true }
 cortex-m-rt = "0.7"
-embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread"] }
+embassy-executor = { version = "0.10.0", features = ["defmt", "platform-cortex-m", "executor-thread", "executor-interrupt"] }
 embassy-futures = { version = "0.1" }
-embassy-time = { version = "0.5", features = ["tick-hz-1_000_000"] }
-embassy-rp = { version = "0.9", features = ["critical-section-impl", "time-driver", "rp2040"] }
-embassy-usb = { version = "0.5.1" }
+embassy-time = { version = "0.5.1", features = ["defmt"] }
+embassy-rp = { version = "0.10.0", features = ["defmt", "critical-section-impl", "time-driver", "rp2040"] }
+embassy-usb = { version = "0.6.0" }
 static_cell = "2"
+heapless = "0.9.2"
 pio = "0.3"
 pio-proc = "0.3"
 rp-pac = "7"

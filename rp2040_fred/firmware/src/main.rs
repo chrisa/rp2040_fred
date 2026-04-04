@@ -5,27 +5,29 @@
 mod resources;
 mod transport;
 
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_futures::select::{select, Either};
 use embassy_rp::{bind_interrupts, usb};
+use embassy_rp::{clocks::ClockConfig, gpio};
 use embassy_time::{Duration, Timer};
 use embassy_usb::class::cmsis_dap_v2::{CmsisDapV2Class, State as CmsisState};
 use embassy_usb::msos;
 use embassy_usb::{Builder, Config};
+use gpio::{Level, Output};
 use panic_probe as _;
 use rp2040_fred_protocol::bridge_proto::{Packet, PACKET_SIZE};
 use static_cell::StaticCell;
+use {defmt_rtt as _, panic_probe as _};
 
-use crate::resources::{AssignedResources, SnifferResources, UsbResources};
+use crate::resources::{AssignedResources, MainResources, SnifferResources, UsbResources};
 use crate::transport::BridgeTransport;
 
-#[cfg(not(feature = "defmt-log"))]
-compile_error!("defmt-log feature must be enabled");
+// #[cfg(not(feature = "defmt-log"))]
+// compile_error!("defmt-log feature must be enabled");
 
-#[cfg(all(feature = "mock-bus", feature = "pio-real"))]
-compile_error!("Use either `mock-bus` or `pio-real`, not both.");
+// #[cfg(all(feature = "mock-bus", feature = "pio-real"))]
+// compile_error!("Use either `mock-bus` or `pio-real`, not both.");
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
@@ -43,13 +45,27 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<embassy_rp::peripherals::USB>;
 });
 
+const USB_IDLE_POLL_MS: u64 = 2;
+const USB_BACKLOG_POLL_US: u64 = 50;
+const USB_OUTGOING_BURST_PACKETS: usize = 16;
+
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
+    ClockConfig::system_freq(125_000_000).expect("set clock failed?");
     let p = embassy_rp::init(Default::default());
     let r = split_resources!(p);
+
     log_info!("fw start: passive-capture default");
 
-    let mut bridge = BridgeTransport::new(r.sniffer);
+    let mut bridge = BridgeTransport::new(&spawner, r.sniffer);
+
+    let mut led = Output::new(r.main.led, Level::Low);
+    led.set_high();
+
+    let mut data_dir_a = Output::new(r.main.pin_26, Level::Low);
+    let mut data_dir_d = Output::new(r.main.pin_27, Level::Low);
+    data_dir_a.set_low();
+    data_dir_d.set_low();
 
     let driver = usb::Driver::new(r.usb.usb, Irqs);
     log_info!("usb driver initialized");
@@ -92,10 +108,14 @@ async fn main(_spawner: Spawner) {
             bridge_class.wait_connection().await;
             log_info!("USB host connected");
 
-            loop {
+            'connected: loop {
                 match select(
                     bridge_class.read_packet(&mut rx_buf),
-                    Timer::after(Duration::from_millis(2)),
+                    if bridge.has_outgoing_backlog() {
+                        Timer::after(Duration::from_micros(USB_BACKLOG_POLL_US))
+                    } else {
+                        Timer::after(Duration::from_millis(USB_IDLE_POLL_MS))
+                    },
                 )
                 .await
                 {
@@ -116,7 +136,9 @@ async fn main(_spawner: Spawner) {
                                 let encoded = pkt.encode();
                                 if bridge_class.write_packet(&encoded).await.is_err() {
                                     log_warn!("USB write failed; dropping connection");
-                                    break;
+                                    break 'connected;
+                                } else {
+                                    // log_info!("wrote USB packet OK");
                                 }
                             }
                         }
@@ -128,11 +150,14 @@ async fn main(_spawner: Spawner) {
                     Either::Second(()) => {}
                 }
 
-                if let Some(pkt) = bridge.poll_outgoing_packet() {
+                for _ in 0..USB_OUTGOING_BURST_PACKETS {
+                    let Some(pkt) = bridge.poll_outgoing_packet() else {
+                        break;
+                    };
                     let encoded = pkt.encode();
                     if bridge_class.write_packet(&encoded).await.is_err() {
                         log_warn!("USB telemetry write failed; dropping connection");
-                        break;
+                        break 'connected;
                     }
                     if let Some(period_ms) = bridge.post_send_delay_ms(&pkt) {
                         Timer::after(Duration::from_millis(period_ms)).await;

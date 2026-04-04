@@ -145,29 +145,31 @@ fn monitor_usb_capture() -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     let _ = t.transact(Packet::capture_set(1, true))?;
 
-    println!("step  tick        sample      D    A   RnW CLK C18 C19 FREDn");
+    println!("step  sample      D    A   RnW CLK FREDn");
     let mut i = 0usize;
+
     loop {
         let pkt = t.read_packet()?;
-        if pkt.msg_type != MsgType::TraceSample || pkt.payload_len < 8 {
+        if pkt.msg_type != MsgType::TraceSample || pkt.payload_len < 4 {
             continue;
         }
-        let p = pkt.payload_used();
-        let tick = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
-        let sample = u32::from_le_bytes([p[4], p[5], p[6], p[7]]);
+        for chunk in pkt.payload_used().chunks_exact(4) {
+            let sample = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let d = (sample & 0xFF) as u8;
+            let a = ((sample >> 8) & 0xFF) as u8;
+            let rnw = if ((sample >> 16) & 1) as u8 == 0 {
+                "W"
+            } else {
+                "R"
+            };
+            let clk = ((sample >> 17) & 1) as u8;
+            let fred_n = ((sample >> 20) & 1) as u8;
 
-        let d = (sample & 0xFF) as u8;
-        let a = ((sample >> 8) & 0xFF) as u8;
-        let rnw = ((sample >> 16) & 1) as u8;
-        let clk = ((sample >> 17) & 1) as u8;
-        let c18 = ((sample >> 18) & 1) as u8;
-        let c19 = ((sample >> 19) & 1) as u8;
-        let fred_n = ((sample >> 20) & 1) as u8;
-
-        println!(
-            "{:04}  {:10}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}   {c18}   {c19}    {fred_n}",
-            i, tick
-        );
-        i = i.wrapping_add(1);
+            println!(
+                "{:04}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
+                i
+            );
+            i = i.wrapping_add(1);
+        }
     }
 }

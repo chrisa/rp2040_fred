@@ -17,7 +17,15 @@ Current Behavior
 - `src/main.rs` runs USB packet IO and delegates transport behavior.
 - `src/transport_mock.rs` handles mock bridge requests/events.
 - `src/transport_pio.rs` handles passive PIO capture requests/events and `TRACE_SAMPLE` streaming.
-- `../pio/passive_sniffer.pio` captures GPIO[20:0] on each 1MHZE edge (rising and falling) while `FRED_N` is asserted.
+- `../pio/passive_sniffer.pio` captures GPIO0..17 on each 1MHZE edge while GPIO20/`FRED_N` is asserted, keeping trace bits 18 and 19 empty so the published sample layout matches the non-consecutive hardware pin map.
+- `pio-real` wiring matches the `non-consec` branch:
+  - `GPIO0..7 = D0..D7`
+  - `GPIO8..15 = A0..A7`
+  - `GPIO16 = RnW`
+  - `GPIO17 = 1MHZE`
+  - `GPIO20 = FRED_N`
+  - `GPIO27 = DATA_DIR`
+  - `GPIO28 = DATA_OE_N`
 - `CAPTURE_SET` controls mode:
   - enabled (`1`): passive trace streaming.
   - disabled (`0`): non-capture request handling (mock telemetry path today).

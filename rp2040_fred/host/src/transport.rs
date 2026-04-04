@@ -99,7 +99,7 @@ impl UsbTransport {
                 handle,
                 in_ep,
                 out_ep,
-                timeout: Duration::from_millis(250),
+                timeout: Duration::from_millis(600_000),
             });
         }
 
@@ -150,7 +150,7 @@ impl HostTransport for UsbTransport {
     fn transact(&mut self, req: Packet) -> io::Result<Vec<Packet>> {
         self.write_packet(&req)?;
 
-        let deadline = Instant::now() + Duration::from_millis(500);
+        let deadline = Instant::now() + Duration::from_millis(5000);
         let mut replies = Vec::new();
         let want_seq = req.seq;
 
