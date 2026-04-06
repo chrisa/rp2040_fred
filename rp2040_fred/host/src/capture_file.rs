@@ -6,9 +6,15 @@ use rp2040_fred_protocol::bridge_proto::{
 };
 
 const CAPTURE_MAGIC: [u8; 8] = *b"FREDCAP\0";
-const CAPTURE_VERSION: u32 = 1;
+const CAPTURE_VERSION: u32 = 2;
 const RESERVED: u32 = 0;
 const MAX_BATCH_SAMPLES: usize = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureEncoding {
+    Raw32,
+    Packed3,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureBatch {
@@ -65,6 +71,7 @@ impl<W: Write> CaptureWriter<W> {
 
 pub struct CaptureReader<R> {
     inner: R,
+    encoding: CaptureEncoding,
 }
 
 impl<R: Read> CaptureReader<R> {
@@ -79,15 +86,19 @@ impl<R: Read> CaptureReader<R> {
         }
 
         let version = read_u32(&mut inner)?;
-        if version != CAPTURE_VERSION {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                format!("unsupported capture version: {version}"),
-            ));
-        }
+        let encoding = match version {
+            1 => CaptureEncoding::Raw32,
+            CAPTURE_VERSION => CaptureEncoding::Packed3,
+            _ => {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("unsupported capture version: {version}"),
+                ));
+            }
+        };
 
         let _reserved = read_u32(&mut inner)?;
-        Ok(Self { inner })
+        Ok(Self { inner, encoding })
     }
 
     pub fn read_batch(&mut self) -> io::Result<Option<CaptureBatch>> {
@@ -104,10 +115,19 @@ impl<R: Read> CaptureReader<R> {
         }
 
         let mut samples = Vec::with_capacity(sample_count);
-        for _ in 0..sample_count {
-            let mut packed = [0u8; TRACE_PACKED_SAMPLE_SIZE];
-            self.inner.read_exact(&mut packed)?;
-            samples.push(unpack_trace_sample(packed));
+        match self.encoding {
+            CaptureEncoding::Raw32 => {
+                for _ in 0..sample_count {
+                    samples.push(read_u32(&mut self.inner)?);
+                }
+            }
+            CaptureEncoding::Packed3 => {
+                for _ in 0..sample_count {
+                    let mut packed = [0u8; TRACE_PACKED_SAMPLE_SIZE];
+                    self.inner.read_exact(&mut packed)?;
+                    samples.push(unpack_trace_sample(packed));
+                }
+            }
         }
 
         Ok(Some(CaptureBatch {
@@ -148,7 +168,7 @@ fn read_u32_or_eof<R: Read>(inner: &mut R) -> io::Result<Option<u32>> {
 mod tests {
     use std::io::Cursor;
 
-    use super::{CaptureReader, CaptureWriter};
+    use super::{CaptureReader, CaptureWriter, CAPTURE_MAGIC};
 
     #[test]
     fn roundtrip_capture_batches() {
@@ -173,5 +193,25 @@ mod tests {
         assert_eq!(batch2.samples, vec![0x0003_F107]);
 
         assert!(reader.read_batch().expect("read eof").is_none());
+    }
+
+    #[test]
+    fn reads_legacy_raw32_capture_batches() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&CAPTURE_MAGIC);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&12u32.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0x0003_8003u32.to_le_bytes());
+        bytes.extend_from_slice(&0x0003_F132u32.to_le_bytes());
+
+        let mut reader = CaptureReader::new(Cursor::new(bytes)).expect("reader");
+        let batch = reader.read_batch().expect("read").expect("batch");
+        assert_eq!(batch.dropped_samples_total, 12);
+        assert_eq!(batch.rx_stall_count_total, 3);
+        assert_eq!(batch.samples, vec![0x0003_8003, 0x0003_F132]);
+        assert!(reader.read_batch().expect("eof").is_none());
     }
 }

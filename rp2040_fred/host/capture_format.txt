@@ -4,7 +4,7 @@ All fields are little-endian.
 
 File header:
 - 8 bytes: magic `FREDCAP\0`
-- u32: format version (`1`)
+- u32: format version (`2`)
 - u32: reserved (`0`)
 
 Then zero or more capture batches:
@@ -23,3 +23,6 @@ with `1MHZE=1` and `FRED_N=0`.
 
 `dropped_samples_total` and `rx_stall_count_total` are absolute counters copied
 from the firmware at the time each USB trace packet was emitted.
+
+The reader also accepts legacy version `1` capture files, which stored each
+sample as a raw little-endian `u32`.
