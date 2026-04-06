@@ -1,12 +1,16 @@
+mod trace_decode;
 mod transport;
 
 use std::env;
+use std::fs::File;
 use std::io;
+use std::io::{BufRead, BufReader};
 use std::thread;
 use std::time::Duration;
 
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 use rp2040_fred_protocol::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
+use trace_decode::{parse_trace_line, FeedbackDecoder, FeedbackSnapshot};
 use transport::{HostTransport, MockTransport, UsbTransport};
 
 fn main() -> io::Result<()> {
@@ -31,6 +35,16 @@ fn main() -> io::Result<()> {
         ("capture-on", "usb") => set_usb_capture(true),
         ("capture-off", "usb") => set_usb_capture(false),
         ("capture", "usb") => monitor_usb_capture(),
+        ("decode", "usb") => decode_usb_capture(),
+        ("decode", "file") => {
+            let path = args.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "usage: fredctl decode file <trace.txt>",
+                )
+            })?;
+            decode_trace_file(&path)
+        }
         _ => {
             print_help();
             Ok(())
@@ -49,6 +63,8 @@ fn print_help() {
     eprintln!("  fredctl capture-on usb");
     eprintln!("  fredctl capture-off usb");
     eprintln!("  fredctl capture usb");
+    eprintln!("  fredctl decode usb");
+    eprintln!("  fredctl decode file <trace.txt>");
 }
 
 fn set_mock_telemetry(enable: bool) -> io::Result<()> {
@@ -172,4 +188,63 @@ fn monitor_usb_capture() -> io::Result<()> {
             i = i.wrapping_add(1);
         }
     }
+}
+
+fn decode_trace_file(path: &str) -> io::Result<()> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut decoder = FeedbackDecoder::new();
+
+    print_decode_header();
+    for line in reader.lines() {
+        let line = line?;
+        let Some((step, sample)) = parse_trace_line(&line)? else {
+            continue;
+        };
+        if let Some(snapshot) = decoder.ingest_sample(step, sample) {
+            print_decoded_snapshot(snapshot);
+        }
+    }
+
+    Ok(())
+}
+
+fn decode_usb_capture() -> io::Result<()> {
+    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
+    let _ = t.transact(Packet::telemetry_set(1, false, 100))?;
+    let _ = t.transact(Packet::capture_set(2, true))?;
+
+    let mut decoder = FeedbackDecoder::new();
+    let mut sample_index = 0u64;
+
+    print_decode_header();
+    loop {
+        let pkt = t.read_packet()?;
+        if pkt.msg_type != MsgType::TraceSample || pkt.payload_len < 4 {
+            continue;
+        }
+
+        for chunk in pkt.payload_used().chunks_exact(4) {
+            let sample = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            if let Some(snapshot) = decoder.ingest_sample(sample_index, sample) {
+                print_decoded_snapshot(snapshot);
+            }
+            sample_index = sample_index.wrapping_add(1);
+        }
+    }
+}
+
+fn print_decode_header() {
+    println!("sample    X_raw    Z_raw    RPMraw RPMdisp");
+}
+
+fn print_decoded_snapshot(snapshot: FeedbackSnapshot) {
+    println!(
+        "{:08}  {}  {}  {:6} {:7}",
+        snapshot.sample_index,
+        snapshot.x_digits(),
+        snapshot.z_digits(),
+        snapshot.rpm_raw,
+        snapshot.rpm_display
+    );
 }
