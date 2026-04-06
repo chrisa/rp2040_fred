@@ -21,8 +21,15 @@ Packed trace sample layout:
 When replayed by the host, each packed sample is reconstructed as a raw capture word
 with `1MHZE=1` and `FRED_N=0`.
 
-`dropped_samples_total` and `rx_stall_count_total` are absolute counters copied
-from the firmware at the time each USB trace packet was emitted.
+`dropped_samples_total` is an absolute software-ring drop counter copied from the
+firmware at the time each USB trace packet was emitted.
+
+`rx_stall_count_total` is an absolute count of PIO RX-FIFO block events: the
+state machine reached `push block` while the 4-word RX FIFO was full at least
+once since the previous check. This is a backpressure indicator, not a direct
+sample-loss count. Because the PIO runs at 20 MHz while the sampled bus is
+1 MHz, a brief block event may clear before the next bus edge and therefore may
+not correspond to an actually lost capture sample.
 
 The reader also accepts legacy version `1` capture files, which stored each
 sample as a raw little-endian `u32`.

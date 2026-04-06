@@ -359,7 +359,7 @@ impl TraceCaptureCounters {
         self.rx_stall_count_total = rx_stall_count_total;
 
         Some(format!(
-            "# capture dropped_delta={dropped_delta} dropped_total={dropped_samples_total} rxstall_delta={stall_delta} rxstall_total={rx_stall_count_total}"
+            "# capture dropped_delta={dropped_delta} dropped_total={dropped_samples_total} rxfifo_block_delta={stall_delta} rxfifo_block_total={rx_stall_count_total}"
         ))
     }
 }
