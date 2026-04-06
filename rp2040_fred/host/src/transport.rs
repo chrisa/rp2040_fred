@@ -1,9 +1,13 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use rp2040_fred_protocol::bridge_proto::{Packet, PACKET_SIZE};
+use rp2040_fred_protocol::bridge_proto::{crc32_ieee, MsgType, Packet, PACKET_SIZE};
 use rp2040_fred_protocol::bridge_service::BridgeService;
 use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
+
+const LEGACY_PROTOCOL_VERSION: u8 = 1;
+const LEGACY_PACKET_SIZE: usize = 32;
+const LEGACY_PAYLOAD_SIZE: usize = 20;
 
 pub trait HostTransport {
     fn transact(&mut self, req: Packet) -> io::Result<Vec<Packet>>;
@@ -39,6 +43,7 @@ pub struct UsbTransport {
     in_ep: u8,
     out_ep: u8,
     timeout: Duration,
+    warned_legacy_packets: bool,
 }
 
 impl UsbTransport {
@@ -100,6 +105,7 @@ impl UsbTransport {
                 in_ep,
                 out_ep,
                 timeout: Duration::from_millis(600_000),
+                warned_legacy_packets: false,
             });
         }
 
@@ -116,18 +122,28 @@ impl UsbTransport {
             .read_bulk(self.in_ep, &mut buf, self.timeout)
             .map_err(io_other)?;
 
-        if n != PACKET_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unexpected USB packet size",
-            ));
+        if n == PACKET_SIZE {
+            let mut raw = [0u8; PACKET_SIZE];
+            raw.copy_from_slice(&buf[..PACKET_SIZE]);
+            return Packet::decode(&raw).map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e))
+            });
         }
 
-        let mut raw = [0u8; PACKET_SIZE];
-        raw.copy_from_slice(&buf[..PACKET_SIZE]);
-        Packet::decode(&raw).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e))
-        })
+        if n == LEGACY_PACKET_SIZE {
+            if !self.warned_legacy_packets {
+                eprintln!("warning: device returned legacy 32-byte packets; likely old firmware/protocol v1");
+                self.warned_legacy_packets = true;
+            }
+            return decode_legacy_packet(&buf[..LEGACY_PACKET_SIZE]);
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unexpected USB packet size: got {n} bytes, expected {PACKET_SIZE} bytes (current protocol v2) or {LEGACY_PACKET_SIZE} bytes (legacy protocol v1)"
+            ),
+        ))
     }
 
     fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
@@ -221,4 +237,67 @@ mod tests {
         }
         assert!(seen >= 1);
     }
+}
+
+fn decode_legacy_packet(raw: &[u8]) -> io::Result<Packet> {
+    if raw.len() != LEGACY_PACKET_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy packet decode with wrong length",
+        ));
+    }
+
+    if raw[0] != 0xA5 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("legacy bad magic: 0x{:02X}", raw[0]),
+        ));
+    }
+    if raw[1] != LEGACY_PROTOCOL_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("legacy bad protocol version: {}", raw[1]),
+        ));
+    }
+
+    let payload_len = raw[3] as usize;
+    if payload_len > LEGACY_PAYLOAD_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("legacy invalid payload length: {payload_len}"),
+        ));
+    }
+
+    let expected_crc = u32::from_le_bytes([raw[28], raw[29], raw[30], raw[31]]);
+    let actual_crc = crc32_ieee(&raw[..28]);
+    if expected_crc != actual_crc {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy CRC mismatch",
+        ));
+    }
+
+    let msg_type = MsgType::from_u8(raw[2]).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("legacy unknown msg type: 0x{:02X}", raw[2]),
+        )
+    })?;
+    let seq = u16::from_le_bytes([raw[4], raw[5]]);
+    let payload = &raw[8..8 + payload_len];
+
+    if msg_type == MsgType::TraceSample {
+        let mut samples = Vec::new();
+        for chunk in payload.chunks_exact(4) {
+            samples.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+        return Ok(Packet::trace_samples(seq, 0, 0, &samples));
+    }
+
+    Packet::new(msg_type, seq, payload).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy packet could not be converted to current packet format",
+        )
+    })
 }

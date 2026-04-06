@@ -349,5 +349,7 @@ class FredUsbClient:
 
         raw = bytes(data)
         if len(raw) < PACKET_SIZE:
-            raise FredProtocolError(f"unexpected USB packet size: {len(raw)}")
+            raise FredProtocolError(
+                f"unexpected USB packet size: got {len(raw)} bytes, expected {PACKET_SIZE} bytes"
+            )
         return _Packet.decode(raw[:PACKET_SIZE])
