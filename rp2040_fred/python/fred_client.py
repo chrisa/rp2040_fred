@@ -339,17 +339,20 @@ class FredUsbClient:
         if self._dev is None or self._ep_in is None:
             raise FredUsbError("device not open")
 
-        try:
-            data = self._dev.read(self._ep_in, PACKET_SIZE, timeout=timeout_ms)
-        except usb.core.USBError as exc:
-            # pyusb maps timeout to backend-specific errno (often 110).
-            if getattr(exc, "errno", None) in (110, 60) or "timed out" in str(exc).lower():
-                return None
-            raise FredUsbError(str(exc)) from exc
+        while True:
+            try:
+                data = self._dev.read(self._ep_in, PACKET_SIZE, timeout=timeout_ms)
+            except usb.core.USBError as exc:
+                # pyusb maps timeout to backend-specific errno (often 110).
+                if getattr(exc, "errno", None) in (110, 60) or "timed out" in str(exc).lower():
+                    return None
+                raise FredUsbError(str(exc)) from exc
 
-        raw = bytes(data)
-        if len(raw) < PACKET_SIZE:
-            raise FredProtocolError(
-                f"unexpected USB packet size: got {len(raw)} bytes, expected {PACKET_SIZE} bytes"
-            )
-        return _Packet.decode(raw[:PACKET_SIZE])
+            raw = bytes(data)
+            if len(raw) == 0:
+                continue
+            if len(raw) < PACKET_SIZE:
+                raise FredProtocolError(
+                    f"unexpected USB packet size: got {len(raw)} bytes, expected {PACKET_SIZE} bytes"
+                )
+            return _Packet.decode(raw[:PACKET_SIZE])

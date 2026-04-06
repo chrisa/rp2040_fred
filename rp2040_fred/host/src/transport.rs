@@ -116,34 +116,42 @@ impl UsbTransport {
     }
 
     pub fn read_packet(&mut self) -> io::Result<Packet> {
-        let mut buf = [0u8; PACKET_SIZE];
-        let n = self
-            .handle
-            .read_bulk(self.in_ep, &mut buf, self.timeout)
-            .map_err(io_other)?;
+        loop {
+            let mut buf = [0u8; PACKET_SIZE];
+            let n = self
+                .handle
+                .read_bulk(self.in_ep, &mut buf, self.timeout)
+                .map_err(io_other)?;
 
-        if n == PACKET_SIZE {
-            let mut raw = [0u8; PACKET_SIZE];
-            raw.copy_from_slice(&buf[..PACKET_SIZE]);
-            return Packet::decode(&raw).map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e))
-            });
-        }
-
-        if n == LEGACY_PACKET_SIZE {
-            if !self.warned_legacy_packets {
-                eprintln!("warning: device returned legacy 32-byte packets; likely old firmware/protocol v1");
-                self.warned_legacy_packets = true;
+            // Embassy's CMSIS-DAP v2 class appends a zero-length packet after
+            // full-size endpoint writes. Skip those framing packets.
+            if n == 0 {
+                continue;
             }
-            return decode_legacy_packet(&buf[..LEGACY_PACKET_SIZE]);
-        }
 
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "unexpected USB packet size: got {n} bytes, expected {PACKET_SIZE} bytes (current protocol v2) or {LEGACY_PACKET_SIZE} bytes (legacy protocol v1)"
-            ),
-        ))
+            if n == PACKET_SIZE {
+                let mut raw = [0u8; PACKET_SIZE];
+                raw.copy_from_slice(&buf[..PACKET_SIZE]);
+                return Packet::decode(&raw).map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e))
+                });
+            }
+
+            if n == LEGACY_PACKET_SIZE {
+                if !self.warned_legacy_packets {
+                    eprintln!("warning: device returned legacy 32-byte packets; likely old firmware/protocol v1");
+                    self.warned_legacy_packets = true;
+                }
+                return decode_legacy_packet(&buf[..LEGACY_PACKET_SIZE]);
+            }
+
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unexpected USB packet size: got {n} bytes, expected {PACKET_SIZE} bytes (current protocol v2) or {LEGACY_PACKET_SIZE} bytes (legacy protocol v1)"
+                ),
+            ));
+        }
     }
 
     fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
