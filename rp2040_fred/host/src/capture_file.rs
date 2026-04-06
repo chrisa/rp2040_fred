@@ -1,7 +1,9 @@
 use std::io;
 use std::io::{ErrorKind, Read, Write};
 
-use rp2040_fred_protocol::bridge_proto::TraceSamples;
+use rp2040_fred_protocol::bridge_proto::{
+    pack_trace_sample, unpack_trace_sample, TraceSamples, TRACE_PACKED_SAMPLE_SIZE,
+};
 
 const CAPTURE_MAGIC: [u8; 8] = *b"FREDCAP\0";
 const CAPTURE_VERSION: u32 = 1;
@@ -37,9 +39,7 @@ impl<W: Write> CaptureWriter<W> {
         self.inner
             .write_all(&trace.rx_stall_count_total.to_le_bytes())?;
         self.inner.write_all(&sample_count.to_le_bytes())?;
-        for sample in trace.iter_samples() {
-            self.inner.write_all(&sample.to_le_bytes())?;
-        }
+        self.inner.write_all(trace.packed_sample_bytes())?;
         Ok(())
     }
 
@@ -57,7 +57,7 @@ impl<W: Write> CaptureWriter<W> {
         self.inner.write_all(&rx_stall_count_total.to_le_bytes())?;
         self.inner.write_all(&sample_count.to_le_bytes())?;
         for sample in samples {
-            self.inner.write_all(&sample.to_le_bytes())?;
+            self.inner.write_all(&pack_trace_sample(*sample))?;
         }
         Ok(())
     }
@@ -105,7 +105,9 @@ impl<R: Read> CaptureReader<R> {
 
         let mut samples = Vec::with_capacity(sample_count);
         for _ in 0..sample_count {
-            samples.push(read_u32(&mut self.inner)?);
+            let mut packed = [0u8; TRACE_PACKED_SAMPLE_SIZE];
+            self.inner.read_exact(&mut packed)?;
+            samples.push(unpack_trace_sample(packed));
         }
 
         Ok(Some(CaptureBatch {

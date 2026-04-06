@@ -23,9 +23,9 @@ wait_fred:
 sample_loop:
     wait 0 gpio 17 [1]
     jmp pin wait_fred
-    mov isr, null side 0 [1]
-    in pins, 18 side 1 [1]
-    push block side 0
+;    mov isr, null side 0 [1]
+;    in pins, 18 side 1 [1]
+;    push block side 0
     wait 1 gpio 17 [1]
     jmp pin wait_fred
     mov isr, null side 0 [1]

@@ -1,14 +1,16 @@
 #![allow(dead_code)]
 
 pub const PACKET_MAGIC: u8 = 0xA5;
-pub const PROTOCOL_VERSION: u8 = 2;
+pub const PROTOCOL_VERSION: u8 = 3;
 pub const HEADER_SIZE: usize = 8;
 pub const CRC_SIZE: usize = 4;
-pub const PACKET_SIZE: usize = 64;
-pub const PAYLOAD_SIZE: usize = PACKET_SIZE - HEADER_SIZE - CRC_SIZE;
+pub const PAYLOAD_SIZE: usize = 305;
+pub const PACKET_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE + CRC_SIZE;
+pub const MIN_PACKET_SIZE: usize = HEADER_SIZE + CRC_SIZE;
 pub const TRACE_METADATA_SIZE: usize = 8;
+pub const TRACE_PACKED_SAMPLE_SIZE: usize = 3;
 pub const TRACE_SAMPLES_PER_PACKET: usize =
-    (PAYLOAD_SIZE - TRACE_METADATA_SIZE) / core::mem::size_of::<u32>();
+    (PAYLOAD_SIZE - TRACE_METADATA_SIZE) / TRACE_PACKED_SAMPLE_SIZE;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +49,7 @@ impl MsgType {
 pub enum DecodeError {
     BadMagic,
     BadVersion,
+    PacketLen,
     PayloadLen,
     UnknownMsgType,
     BadCrc,
@@ -56,7 +59,7 @@ pub enum DecodeError {
 pub struct Packet {
     pub msg_type: MsgType,
     pub seq: u16,
-    pub payload_len: u8,
+    pub payload_len: u16,
     pub payload: [u8; PAYLOAD_SIZE],
 }
 
@@ -70,12 +73,16 @@ pub struct TraceSamples<'a> {
 impl<'a> TraceSamples<'a> {
     pub fn iter_samples(&self) -> impl Iterator<Item = u32> + 'a {
         self.sample_bytes
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .chunks_exact(TRACE_PACKED_SAMPLE_SIZE)
+            .map(|chunk| unpack_trace_sample([chunk[0], chunk[1], chunk[2]]))
     }
 
     pub fn sample_count(&self) -> usize {
-        self.sample_bytes.len() / 4
+        self.sample_bytes.len() / TRACE_PACKED_SAMPLE_SIZE
+    }
+
+    pub fn packed_sample_bytes(&self) -> &'a [u8] {
+        self.sample_bytes
     }
 }
 
@@ -90,7 +97,7 @@ impl Packet {
         Some(Self {
             msg_type,
             seq,
-            payload_len: payload.len() as u8,
+            payload_len: payload.len() as u16,
             payload: fixed,
         })
     }
@@ -100,41 +107,56 @@ impl Packet {
         out[0] = PACKET_MAGIC;
         out[1] = PROTOCOL_VERSION;
         out[2] = self.msg_type as u8;
-        out[3] = self.payload_len;
+        out[3] = 0;
         out[4..6].copy_from_slice(&self.seq.to_le_bytes());
-        out[6..8].copy_from_slice(&0u16.to_le_bytes());
-        out[HEADER_SIZE..PACKET_SIZE - CRC_SIZE].copy_from_slice(&self.payload);
-        let crc = crc32_ieee(&out[..PACKET_SIZE - CRC_SIZE]);
-        out[PACKET_SIZE - CRC_SIZE..PACKET_SIZE].copy_from_slice(&crc.to_le_bytes());
+        out[6..8].copy_from_slice(&self.payload_len.to_le_bytes());
+        let encoded_len = self.encoded_len();
+        let payload_len = self.payload_len as usize;
+        out[HEADER_SIZE..HEADER_SIZE + payload_len].copy_from_slice(self.payload_used());
+        let crc_offset = HEADER_SIZE + payload_len;
+        let crc = crc32_ieee(&out[..crc_offset]);
+        out[crc_offset..encoded_len].copy_from_slice(&crc.to_le_bytes());
         out
     }
 
-    pub fn decode(raw: &[u8; PACKET_SIZE]) -> Result<Self, DecodeError> {
+    pub fn encoded_len(&self) -> usize {
+        HEADER_SIZE + self.payload_len as usize + CRC_SIZE
+    }
+
+    pub fn decode(raw: &[u8]) -> Result<Self, DecodeError> {
+        if raw.len() < MIN_PACKET_SIZE {
+            return Err(DecodeError::PacketLen);
+        }
         if raw[0] != PACKET_MAGIC {
             return Err(DecodeError::BadMagic);
         }
         if raw[1] != PROTOCOL_VERSION {
             return Err(DecodeError::BadVersion);
         }
-        let payload_len = raw[3];
+        let payload_len = u16::from_le_bytes([raw[6], raw[7]]);
         if payload_len as usize > PAYLOAD_SIZE {
             return Err(DecodeError::PayloadLen);
         }
+        let encoded_len = HEADER_SIZE + payload_len as usize + CRC_SIZE;
+        if raw.len() != encoded_len {
+            return Err(DecodeError::PacketLen);
+        }
         let msg_type = MsgType::from_u8(raw[2]).ok_or(DecodeError::UnknownMsgType)?;
+        let crc_offset = HEADER_SIZE + payload_len as usize;
         let expected_crc = u32::from_le_bytes([
-            raw[PACKET_SIZE - CRC_SIZE],
-            raw[PACKET_SIZE - CRC_SIZE + 1],
-            raw[PACKET_SIZE - CRC_SIZE + 2],
-            raw[PACKET_SIZE - CRC_SIZE + 3],
+            raw[crc_offset],
+            raw[crc_offset + 1],
+            raw[crc_offset + 2],
+            raw[crc_offset + 3],
         ]);
-        let actual_crc = crc32_ieee(&raw[..PACKET_SIZE - CRC_SIZE]);
+        let actual_crc = crc32_ieee(&raw[..crc_offset]);
         if expected_crc != actual_crc {
             return Err(DecodeError::BadCrc);
         }
 
         let seq = u16::from_le_bytes([raw[4], raw[5]]);
         let mut payload = [0u8; PAYLOAD_SIZE];
-        payload.copy_from_slice(&raw[HEADER_SIZE..PACKET_SIZE - CRC_SIZE]);
+        payload[..payload_len as usize].copy_from_slice(&raw[HEADER_SIZE..crc_offset]);
         Ok(Self {
             msg_type,
             seq,
@@ -211,8 +233,9 @@ impl Packet {
         let mut used = TRACE_METADATA_SIZE;
 
         for sample in samples {
-            payload[used..used + 4].copy_from_slice(&sample.to_le_bytes());
-            used += 4;
+            let packed = pack_trace_sample(*sample);
+            payload[used..used + TRACE_PACKED_SAMPLE_SIZE].copy_from_slice(&packed);
+            used += TRACE_PACKED_SAMPLE_SIZE;
         }
 
         Self::new(MsgType::TraceSample, seq, &payload[..used]).expect("valid trace samples")
@@ -232,14 +255,29 @@ impl Packet {
         let used = self.payload_used();
         let dropped_samples_total = u32::from_le_bytes([used[0], used[1], used[2], used[3]]);
         let rx_stall_count_total = u32::from_le_bytes([used[4], used[5], used[6], used[7]]);
-        let sample_bytes_len = (used.len().saturating_sub(TRACE_METADATA_SIZE) / 4) * 4;
+        let sample_bytes = &used[TRACE_METADATA_SIZE..];
+        if sample_bytes.len() % TRACE_PACKED_SAMPLE_SIZE != 0 {
+            return None;
+        }
 
         Some(TraceSamples {
             dropped_samples_total,
             rx_stall_count_total,
-            sample_bytes: &used[TRACE_METADATA_SIZE..TRACE_METADATA_SIZE + sample_bytes_len],
+            sample_bytes,
         })
     }
+}
+
+pub fn pack_trace_sample(sample: u32) -> [u8; TRACE_PACKED_SAMPLE_SIZE] {
+    [
+        (sample & 0xFF) as u8,
+        ((sample >> 8) & 0xFF) as u8,
+        ((sample >> 16) & 0x01) as u8,
+    ]
+}
+
+pub fn unpack_trace_sample(packed: [u8; TRACE_PACKED_SAMPLE_SIZE]) -> u32 {
+    (packed[0] as u32) | ((packed[1] as u32) << 8) | (((packed[2] & 0x01) as u32) << 16) | (1 << 17)
 }
 
 pub fn crc32_ieee(data: &[u8]) -> u32 {
@@ -260,9 +298,13 @@ pub fn crc32_ieee(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        crc32_ieee, DecodeError, MsgType, Packet, CRC_SIZE, PACKET_MAGIC, PACKET_SIZE,
-        PROTOCOL_VERSION,
+        crc32_ieee, pack_trace_sample, unpack_trace_sample, DecodeError, MsgType, Packet, CRC_SIZE,
+        HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC, PROTOCOL_VERSION,
     };
+
+    fn sample(data: u8, addr: u8, read: bool) -> u32 {
+        (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | (1 << 17)
+    }
 
     #[test]
     fn crc32_golden_vector() {
@@ -273,7 +315,7 @@ mod tests {
     fn ping_roundtrip() {
         let pkt = Packet::ping(0x1234);
         let raw = pkt.encode();
-        let got = Packet::decode(&raw).expect("decode");
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode");
         assert_eq!(got.msg_type, MsgType::Ping);
         assert_eq!(got.seq, 0x1234);
         assert_eq!(got.payload_len, 0);
@@ -283,7 +325,7 @@ mod tests {
     fn telemetry_roundtrip() {
         let pkt = Packet::telemetry(5, 0x1122_3344, -12345, 54321, 1800, 0x03);
         let raw = pkt.encode();
-        let got = Packet::decode(&raw).expect("decode");
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode");
         assert_eq!(got.msg_type, MsgType::Telemetry);
         assert_eq!(got.seq, 5);
         assert_eq!(got.payload_len, 16);
@@ -300,24 +342,30 @@ mod tests {
     fn capture_and_trace_roundtrip() {
         let capture = Packet::capture_set(0x22, true);
         let capture_raw = capture.encode();
-        let capture_got = Packet::decode(&capture_raw).expect("decode capture");
+        let capture_got =
+            Packet::decode(&capture_raw[..capture.encoded_len()]).expect("decode capture");
         assert_eq!(capture_got.msg_type, MsgType::CaptureSet);
         assert_eq!(capture_got.seq, 0x22);
         assert_eq!(capture_got.payload_used(), &[1]);
 
-        let trace = Packet::trace_samples(0x33, 7, 2, &[0x0102_0304, 0xA5A5_5A5A]);
+        let trace = Packet::trace_samples(
+            0x33,
+            7,
+            2,
+            &[sample(0x04, 0x03, false), sample(0x5A, 0xA5, true)],
+        );
         let trace_raw = trace.encode();
-        let trace_got = Packet::decode(&trace_raw).expect("decode trace");
+        let trace_got = Packet::decode(&trace_raw[..trace.encoded_len()]).expect("decode trace");
         assert_eq!(trace_got.msg_type, MsgType::TraceSample);
         assert_eq!(trace_got.seq, 0x33);
-        assert_eq!(trace_got.payload_len, 16);
+        assert_eq!(trace_got.payload_len, 14);
         let trace_decoded = trace_got.decode_trace_samples().expect("trace payload");
         assert_eq!(trace_decoded.dropped_samples_total, 7);
         assert_eq!(trace_decoded.rx_stall_count_total, 2);
         assert_eq!(trace_decoded.sample_count(), 2);
         let mut samples = trace_decoded.iter_samples();
-        assert_eq!(samples.next(), Some(0x0102_0304));
-        assert_eq!(samples.next(), Some(0xA5A5_5A5A));
+        assert_eq!(samples.next(), Some(sample(0x04, 0x03, false)));
+        assert_eq!(samples.next(), Some(sample(0x5A, 0xA5, true)));
         assert_eq!(samples.next(), None);
     }
 
@@ -326,18 +374,30 @@ mod tests {
         let pkt = Packet::ack(7, MsgType::Ping, 0);
         let mut raw = pkt.encode();
         raw[10] ^= 0x55;
-        assert_eq!(Packet::decode(&raw), Err(DecodeError::BadCrc));
+        assert_eq!(
+            Packet::decode(&raw[..pkt.encoded_len()]),
+            Err(DecodeError::BadCrc)
+        );
+    }
+
+    #[test]
+    fn packed_trace_sample_roundtrip() {
+        let packed = pack_trace_sample(sample(0x34, 0xF1, true));
+        assert_eq!(packed, [0x34, 0xF1, 0x01]);
+        assert_eq!(unpack_trace_sample(packed), sample(0x34, 0xF1, true));
     }
 
     #[test]
     fn decode_rejects_bad_header() {
-        let mut raw = [0u8; PACKET_SIZE];
+        let mut raw = [0u8; MIN_PACKET_SIZE];
         raw[0] = PACKET_MAGIC;
         raw[1] = PROTOCOL_VERSION;
         raw[2] = 0x01;
         raw[3] = 0;
-        let crc = crc32_ieee(&raw[..PACKET_SIZE - CRC_SIZE]);
-        raw[PACKET_SIZE - CRC_SIZE..PACKET_SIZE].copy_from_slice(&crc.to_le_bytes());
+        raw[4..6].copy_from_slice(&0u16.to_le_bytes());
+        raw[6..8].copy_from_slice(&0u16.to_le_bytes());
+        let crc = crc32_ieee(&raw[..HEADER_SIZE]);
+        raw[HEADER_SIZE..HEADER_SIZE + CRC_SIZE].copy_from_slice(&crc.to_le_bytes());
 
         raw[0] = 0x00;
         assert_eq!(Packet::decode(&raw), Err(DecodeError::BadMagic));

@@ -11,14 +11,15 @@ Then zero or more capture batches:
 - u32: `dropped_samples_total`
 - u32: `rx_stall_count_total`
 - u32: `sample_count`
-- `sample_count` x u32: raw trace sample words
+- `sample_count` x 3 bytes: packed trace samples
 
-The sample words use the same bit layout as the passive sniffer:
-- bits `7:0`: data bus
-- bits `15:8`: address bus
-- bit `16`: read/not-write
-- bit `17`: sampled 1MHz clock state
-- bit `20`: `FRED_N`
+Packed trace sample layout:
+- byte `0`: data bus
+- byte `1`: address bus
+- byte `2` bit `0`: read/not-write
+
+When replayed by the host, each packed sample is reconstructed as a raw capture word
+with `1MHZE=1` and `FRED_N=0`.
 
 `dropped_samples_total` and `rx_stall_count_total` are absolute counters copied
 from the firmware at the time each USB trace packet was emitted.

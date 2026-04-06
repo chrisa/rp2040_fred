@@ -1,13 +1,19 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use rp2040_fred_protocol::bridge_proto::{crc32_ieee, MsgType, Packet, PACKET_SIZE};
+use rp2040_fred_protocol::bridge_proto::{
+    crc32_ieee, MsgType, Packet, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_SIZE,
+    PROTOCOL_VERSION,
+};
 use rp2040_fred_protocol::bridge_service::BridgeService;
 use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
 
 const LEGACY_PROTOCOL_VERSION: u8 = 1;
 const LEGACY_PACKET_SIZE: usize = 32;
 const LEGACY_PAYLOAD_SIZE: usize = 20;
+const V2_PROTOCOL_VERSION: u8 = 2;
+const V2_PACKET_SIZE: usize = 64;
+const V2_PAYLOAD_SIZE: usize = V2_PACKET_SIZE - HEADER_SIZE - CRC_SIZE;
 
 pub trait HostTransport {
     fn transact(&mut self, req: Packet) -> io::Result<Vec<Packet>>;
@@ -129,26 +135,35 @@ impl UsbTransport {
                 continue;
             }
 
-            if n == PACKET_SIZE {
-                let mut raw = [0u8; PACKET_SIZE];
-                raw.copy_from_slice(&buf[..PACKET_SIZE]);
-                return Packet::decode(&raw).map_err(|e| {
+            let raw = &buf[..n];
+            if raw.len() >= MIN_PACKET_SIZE && raw[1] == PROTOCOL_VERSION {
+                return Packet::decode(raw).map_err(|e| {
                     io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {:?}", e))
                 });
             }
 
-            if n == LEGACY_PACKET_SIZE {
+            if n == V2_PACKET_SIZE && raw[1] == V2_PROTOCOL_VERSION {
+                if !self.warned_legacy_packets {
+                    eprintln!(
+                        "warning: device returned legacy fixed-size 64-byte packets; likely old firmware/protocol v2"
+                    );
+                    self.warned_legacy_packets = true;
+                }
+                return decode_v2_packet(raw);
+            }
+
+            if n == LEGACY_PACKET_SIZE && raw[1] == LEGACY_PROTOCOL_VERSION {
                 if !self.warned_legacy_packets {
                     eprintln!("warning: device returned legacy 32-byte packets; likely old firmware/protocol v1");
                     self.warned_legacy_packets = true;
                 }
-                return decode_legacy_packet(&buf[..LEGACY_PACKET_SIZE]);
+                return decode_legacy_packet(raw);
             }
 
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "unexpected USB packet size: got {n} bytes, expected {PACKET_SIZE} bytes (current protocol v2) or {LEGACY_PACKET_SIZE} bytes (legacy protocol v1)"
+                    "unexpected USB packet size: got {n} bytes, expected a protocol v{PROTOCOL_VERSION} packet between {MIN_PACKET_SIZE} and {PACKET_SIZE} bytes, a protocol v{V2_PROTOCOL_VERSION} packet of {V2_PACKET_SIZE} bytes, or a protocol v{LEGACY_PROTOCOL_VERSION} packet of {LEGACY_PACKET_SIZE} bytes"
                 ),
             ));
         }
@@ -156,14 +171,15 @@ impl UsbTransport {
 
     fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
         let raw = pkt.encode();
+        let expected = pkt.encoded_len();
         let n = self
             .handle
-            .write_bulk(self.out_ep, &raw, self.timeout)
+            .write_bulk(self.out_ep, &raw[..expected], self.timeout)
             .map_err(io_other)?;
-        if n != PACKET_SIZE {
+        if n != expected {
             return Err(io::Error::new(
                 io::ErrorKind::WriteZero,
-                "short USB bulk write",
+                format!("short USB bulk write: got {n} bytes, expected {expected} bytes"),
             ));
         }
         Ok(())
@@ -306,6 +322,69 @@ fn decode_legacy_packet(raw: &[u8]) -> io::Result<Packet> {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "legacy packet could not be converted to current packet format",
+        )
+    })
+}
+
+fn decode_v2_packet(raw: &[u8]) -> io::Result<Packet> {
+    if raw.len() != V2_PACKET_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "v2 packet decode with wrong length",
+        ));
+    }
+
+    if raw[0] != 0xA5 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("v2 bad magic: 0x{:02X}", raw[0]),
+        ));
+    }
+    if raw[1] != V2_PROTOCOL_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("v2 bad protocol version: {}", raw[1]),
+        ));
+    }
+
+    let payload_len = raw[3] as usize;
+    if payload_len > V2_PAYLOAD_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("v2 invalid payload length: {payload_len}"),
+        ));
+    }
+
+    let expected_crc = u32::from_le_bytes([raw[60], raw[61], raw[62], raw[63]]);
+    let actual_crc = crc32_ieee(&raw[..60]);
+    if expected_crc != actual_crc {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "v2 CRC mismatch",
+        ));
+    }
+
+    let msg_type = MsgType::from_u8(raw[2]).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("v2 unknown msg type: 0x{:02X}", raw[2]),
+        )
+    })?;
+    let seq = u16::from_le_bytes([raw[4], raw[5]]);
+    let payload = &raw[8..8 + payload_len];
+
+    if msg_type == MsgType::TraceSample {
+        let mut samples = Vec::new();
+        for chunk in payload.chunks_exact(4) {
+            samples.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        }
+        return Ok(Packet::trace_samples(seq, 0, 0, &samples));
+    }
+
+    Packet::new(msg_type, seq, payload).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "v2 packet could not be converted to current packet format",
         )
     })
 }

@@ -16,12 +16,14 @@ import usb.core
 import usb.util
 
 PACKET_MAGIC = 0xA5
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 HEADER_SIZE = 8
 CRC_SIZE = 4
-PACKET_SIZE = 64
-PAYLOAD_SIZE = PACKET_SIZE - HEADER_SIZE - CRC_SIZE
+PAYLOAD_SIZE = 305
+PACKET_SIZE = HEADER_SIZE + PAYLOAD_SIZE + CRC_SIZE
+MIN_PACKET_SIZE = HEADER_SIZE + CRC_SIZE
 TRACE_METADATA_SIZE = 8
+TRACE_PACKED_SAMPLE_SIZE = 3
 
 MSG_PING = 0x01
 MSG_TELEMETRY_SET = 0x10
@@ -51,40 +53,43 @@ class _Packet:
         if len(self.payload) > PAYLOAD_SIZE:
             raise FredProtocolError("payload too large")
 
-        fixed_payload = self.payload.ljust(PAYLOAD_SIZE, b"\x00")
         header = struct.pack(
-            "<BBBBH",
+            "<BBBBHH",
             PACKET_MAGIC,
             PROTOCOL_VERSION,
             self.msg_type,
-            len(self.payload),
+            0,
             self.seq & 0xFFFF,
+            len(self.payload),
         )
-        reserved = b"\x00\x00"
-        body = header + reserved + fixed_payload
+        body = header + self.payload
         crc = binascii.crc32(body) & 0xFFFFFFFF
         return body + struct.pack("<I", crc)
 
     @staticmethod
     def decode(raw: bytes) -> "_Packet":
-        if len(raw) < PACKET_SIZE:
+        if len(raw) < MIN_PACKET_SIZE:
             raise FredProtocolError(f"short packet: {len(raw)} bytes")
 
-        raw = raw[:PACKET_SIZE]
-        magic, version, msg_type, payload_len, seq = struct.unpack_from("<BBBBH", raw, 0)
+        magic, version, msg_type, _reserved, seq, payload_len = struct.unpack_from("<BBBBHH", raw, 0)
         if magic != PACKET_MAGIC:
             raise FredProtocolError(f"bad magic: 0x{magic:02X}")
         if version != PROTOCOL_VERSION:
             raise FredProtocolError(f"bad protocol version: {version}")
         if payload_len > PAYLOAD_SIZE:
             raise FredProtocolError(f"invalid payload length: {payload_len}")
+        expected_len = HEADER_SIZE + payload_len + CRC_SIZE
+        if len(raw) != expected_len:
+            raise FredProtocolError(
+                f"wrong packet length: got {len(raw)} bytes, expected {expected_len}"
+            )
 
-        expected_crc = struct.unpack_from("<I", raw, PACKET_SIZE - CRC_SIZE)[0]
-        actual_crc = binascii.crc32(raw[: PACKET_SIZE - CRC_SIZE]) & 0xFFFFFFFF
+        expected_crc = struct.unpack_from("<I", raw, expected_len - CRC_SIZE)[0]
+        actual_crc = binascii.crc32(raw[: expected_len - CRC_SIZE]) & 0xFFFFFFFF
         if expected_crc != actual_crc:
             raise FredProtocolError("CRC mismatch")
 
-        payload = raw[8 : 8 + payload_len]
+        payload = raw[HEADER_SIZE : HEADER_SIZE + payload_len]
         return _Packet(msg_type=msg_type, seq=seq, payload=payload)
 
 
@@ -186,7 +191,7 @@ class FredUsbClient:
                 break
             if pkt.msg_type == MSG_TELEMETRY and len(pkt.payload) >= 16:
                 self._consume_telemetry(pkt)
-            elif pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= 4:
+            elif pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= TRACE_METADATA_SIZE:
                 self._pending_capture_samples.extend(self._decode_trace_samples(pkt))
 
         return dict(self._latest)
@@ -202,7 +207,7 @@ class FredUsbClient:
 
             if pkt.msg_type == MSG_TELEMETRY and len(pkt.payload) >= 16:
                 self._consume_telemetry(pkt)
-            elif pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= 4:
+            elif pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= TRACE_METADATA_SIZE:
                 samples.extend(self._decode_trace_samples(pkt))
 
         return samples
@@ -273,7 +278,7 @@ class FredUsbClient:
             if pkt.msg_type == MSG_TELEMETRY and len(pkt.payload) >= 16:
                 self._consume_telemetry(pkt)
                 continue
-            if pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= 4:
+            if pkt.msg_type == MSG_TRACE_SAMPLE and len(pkt.payload) >= TRACE_METADATA_SIZE:
                 self._pending_capture_samples.extend(self._decode_trace_samples(pkt))
                 continue
 
@@ -318,8 +323,11 @@ class FredUsbClient:
             payload = pkt.payload
 
         samples: List[int] = []
-        for offset in range(0, len(payload) - (len(payload) % 4), 4):
-            samples.append(struct.unpack_from("<I", payload, offset)[0])
+        for offset in range(0, len(payload) - (len(payload) % TRACE_PACKED_SAMPLE_SIZE), TRACE_PACKED_SAMPLE_SIZE):
+            data = payload[offset]
+            addr = payload[offset + 1]
+            flags = payload[offset + 2]
+            samples.append(data | (addr << 8) | ((flags & 0x01) << 16) | (1 << 17))
         return samples
 
     def _drain_pending_capture_samples(self) -> List[int]:
@@ -332,8 +340,8 @@ class FredUsbClient:
             raise FredUsbError("device not open")
         raw = pkt.encode()
         written = self._dev.write(self._ep_out, raw, timeout=self.timeout_ms)
-        if written != PACKET_SIZE:
-            raise FredUsbError(f"short USB write: {written} bytes")
+        if written != len(raw):
+            raise FredUsbError(f"short USB write: got {written} bytes, expected {len(raw)} bytes")
 
     def _read_packet(self, timeout_ms: int) -> Optional[_Packet]:
         if self._dev is None or self._ep_in is None:
@@ -351,8 +359,8 @@ class FredUsbClient:
             raw = bytes(data)
             if len(raw) == 0:
                 continue
-            if len(raw) < PACKET_SIZE:
+            if len(raw) < MIN_PACKET_SIZE:
                 raise FredProtocolError(
-                    f"unexpected USB packet size: got {len(raw)} bytes, expected {PACKET_SIZE} bytes"
+                    f"unexpected USB packet size: got {len(raw)} bytes, expected between {MIN_PACKET_SIZE} and {PACKET_SIZE} bytes"
                 )
-            return _Packet.decode(raw[:PACKET_SIZE])
+            return _Packet.decode(raw)

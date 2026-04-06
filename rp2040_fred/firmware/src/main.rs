@@ -16,7 +16,7 @@ use embassy_usb::msos;
 use embassy_usb::{Builder, Config};
 use gpio::{Level, Output};
 use panic_probe as _;
-use rp2040_fred_protocol::bridge_proto::{Packet, PACKET_SIZE};
+use rp2040_fred_protocol::bridge_proto::{Packet, MIN_PACKET_SIZE, PACKET_SIZE};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -122,11 +122,8 @@ async fn main(_spawner: Spawner) {
                 .await
                 {
                     Either::First(Ok(n)) => {
-                        if n >= PACKET_SIZE {
-                            let mut raw = [0u8; PACKET_SIZE];
-                            raw.copy_from_slice(&rx_buf[..PACKET_SIZE]);
-
-                            let reply_count = match Packet::decode(&raw) {
+                        if n >= MIN_PACKET_SIZE {
+                            let reply_count = match Packet::decode(&rx_buf[..n]) {
                                 Ok(req) => bridge.handle_request(req, &mut replies),
                                 Err(_) => {
                                     replies[0] = Packet::nack(0, 0xFF, 0x02);
@@ -136,7 +133,12 @@ async fn main(_spawner: Spawner) {
 
                             for pkt in replies.iter().take(reply_count) {
                                 let encoded = pkt.encode();
-                                if bridge_class.write_packet(&encoded).await.is_err() {
+                                let encoded_len = pkt.encoded_len();
+                                if bridge_class
+                                    .write_packet(&encoded[..encoded_len])
+                                    .await
+                                    .is_err()
+                                {
                                     log_warn!("USB write failed; dropping connection");
                                     break 'connected;
                                 } else {
@@ -157,7 +159,12 @@ async fn main(_spawner: Spawner) {
                         break;
                     };
                     let encoded = pkt.encode();
-                    if bridge_class.write_packet(&encoded).await.is_err() {
+                    let encoded_len = pkt.encoded_len();
+                    if bridge_class
+                        .write_packet(&encoded[..encoded_len])
+                        .await
+                        .is_err()
+                    {
                         log_warn!("USB telemetry write failed; dropping connection");
                         break 'connected;
                     }
