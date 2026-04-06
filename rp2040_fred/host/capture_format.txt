@@ -1,0 +1,24 @@
+Binary capture format for `fredctl`
+
+All fields are little-endian.
+
+File header:
+- 8 bytes: magic `FREDCAP\0`
+- u32: format version (`1`)
+- u32: reserved (`0`)
+
+Then zero or more capture batches:
+- u32: `dropped_samples_total`
+- u32: `rx_stall_count_total`
+- u32: `sample_count`
+- `sample_count` x u32: raw trace sample words
+
+The sample words use the same bit layout as the passive sniffer:
+- bits `7:0`: data bus
+- bits `15:8`: address bus
+- bit `16`: read/not-write
+- bit `17`: sampled 1MHz clock state
+- bit `20`: `FRED_N`
+
+`dropped_samples_total` and `rx_stall_count_total` are absolute counters copied
+from the firmware at the time each USB trace packet was emitted.

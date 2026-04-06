@@ -1,16 +1,18 @@
+mod capture_file;
 mod trace_decode;
 mod transport;
 
 use std::env;
 use std::fs::File;
 use std::io;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::thread;
 use std::time::Duration;
 
+use capture_file::{CaptureReader, CaptureWriter};
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 use rp2040_fred_protocol::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
-use trace_decode::{parse_trace_line, FeedbackDecoder, FeedbackSnapshot};
+use trace_decode::{FeedbackDecoder, FeedbackSnapshot};
 use transport::{HostTransport, MockTransport, UsbTransport};
 
 fn main() -> io::Result<()> {
@@ -35,15 +37,33 @@ fn main() -> io::Result<()> {
         ("capture-on", "usb") => set_usb_capture(true),
         ("capture-off", "usb") => set_usb_capture(false),
         ("capture", "usb") => monitor_usb_capture(),
+        ("capture", "file") => {
+            let path = args.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "usage: fredctl capture file <capture.bin>",
+                )
+            })?;
+            capture_usb_to_file(&path)
+        }
+        ("raw", "file") => {
+            let path = args.next().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "usage: fredctl raw file <capture.bin>",
+                )
+            })?;
+            raw_capture_file(&path)
+        }
         ("decode", "usb") => decode_usb_capture(),
         ("decode", "file") => {
             let path = args.next().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "usage: fredctl decode file <trace.txt>",
+                    "usage: fredctl decode file <capture.bin>",
                 )
             })?;
-            decode_trace_file(&path)
+            decode_capture_file(&path)
         }
         _ => {
             print_help();
@@ -63,8 +83,10 @@ fn print_help() {
     eprintln!("  fredctl capture-on usb");
     eprintln!("  fredctl capture-off usb");
     eprintln!("  fredctl capture usb");
+    eprintln!("  fredctl capture file <capture.bin>");
+    eprintln!("  fredctl raw file <capture.bin>");
     eprintln!("  fredctl decode usb");
-    eprintln!("  fredctl decode file <trace.txt>");
+    eprintln!("  fredctl decode file <capture.bin>");
 }
 
 fn set_mock_telemetry(enable: bool) -> io::Result<()> {
@@ -161,8 +183,8 @@ fn monitor_usb_capture() -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     let _ = t.transact(Packet::capture_set(1, true))?;
 
-    println!("step  sample      D    A   RnW CLK FREDn");
-    let mut i = 0usize;
+    print_raw_header();
+    let mut i = 0u64;
     let mut counters = TraceCaptureCounters::default();
 
     loop {
@@ -178,42 +200,10 @@ fn monitor_usb_capture() -> io::Result<()> {
         }
 
         for sample in trace.iter_samples() {
-            let d = (sample & 0xFF) as u8;
-            let a = ((sample >> 8) & 0xFF) as u8;
-            let rnw = if ((sample >> 16) & 1) as u8 == 0 {
-                "W"
-            } else {
-                "R"
-            };
-            let clk = ((sample >> 17) & 1) as u8;
-            let fred_n = ((sample >> 20) & 1) as u8;
-
-            println!(
-                "{:04}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
-                i
-            );
+            print_raw_sample(i, sample);
             i = i.wrapping_add(1);
         }
     }
-}
-
-fn decode_trace_file(path: &str) -> io::Result<()> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut decoder = FeedbackDecoder::new();
-
-    print_decode_header();
-    for line in reader.lines() {
-        let line = line?;
-        let Some((step, sample)) = parse_trace_line(&line)? else {
-            continue;
-        };
-        if let Some(snapshot) = decoder.ingest_sample(step, sample) {
-            print_decoded_snapshot(snapshot);
-        }
-    }
-
-    Ok(())
 }
 
 fn decode_usb_capture() -> io::Result<()> {
@@ -245,6 +235,93 @@ fn decode_usb_capture() -> io::Result<()> {
             sample_index = sample_index.wrapping_add(1);
         }
     }
+}
+
+fn capture_usb_to_file(path: &str) -> io::Result<()> {
+    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
+    let _ = t.transact(Packet::telemetry_set(1, false, 100))?;
+    let _ = t.transact(Packet::capture_set(2, true))?;
+
+    let file = File::create(path)?;
+    let mut writer = CaptureWriter::new(file)?;
+
+    loop {
+        let pkt = t.read_packet()?;
+        let Some(trace) = pkt.decode_trace_samples() else {
+            continue;
+        };
+        writer.write_trace(trace)?;
+    }
+}
+
+fn raw_capture_file(path: &str) -> io::Result<()> {
+    let file = File::open(path)?;
+    let mut reader = CaptureReader::new(BufReader::new(file))?;
+    let mut counters = TraceCaptureCounters::default();
+    let mut sample_index = 0u64;
+
+    print_raw_header();
+    while let Some(batch) = reader.read_batch()? {
+        if let Some(comment) =
+            counters.update(batch.dropped_samples_total, batch.rx_stall_count_total)
+        {
+            println!("{comment}");
+        }
+
+        for sample in batch.samples {
+            print_raw_sample(sample_index, sample);
+            sample_index = sample_index.wrapping_add(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn decode_capture_file(path: &str) -> io::Result<()> {
+    let file = File::open(path)?;
+    let mut reader = CaptureReader::new(BufReader::new(file))?;
+    let mut decoder = FeedbackDecoder::new();
+    let mut counters = TraceCaptureCounters::default();
+    let mut sample_index = 0u64;
+
+    print_decode_header();
+    while let Some(batch) = reader.read_batch()? {
+        if let Some(comment) =
+            counters.update(batch.dropped_samples_total, batch.rx_stall_count_total)
+        {
+            println!("{comment}");
+        }
+
+        for sample in batch.samples {
+            if let Some(snapshot) = decoder.ingest_sample(sample_index, sample) {
+                print_decoded_snapshot(snapshot);
+            }
+            sample_index = sample_index.wrapping_add(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn print_raw_header() {
+    println!("step  sample      D    A   RnW CLK FREDn");
+}
+
+fn print_raw_sample(step: u64, sample: u32) {
+    let d = (sample & 0xFF) as u8;
+    let a = ((sample >> 8) & 0xFF) as u8;
+    let rnw = if ((sample >> 16) & 1) as u8 == 0 {
+        "W"
+    } else {
+        "R"
+    };
+    let clk = ((sample >> 17) & 1) as u8;
+    let fred_n = ((sample >> 20) & 1) as u8;
+
+    println!(
+        "{:04}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
+        step
+    );
 }
 
 fn print_decode_header() {

@@ -1,6 +1,4 @@
 use std::fmt;
-use std::io;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
     pub data: u8,
@@ -211,40 +209,6 @@ impl FeedbackDecoder {
     }
 }
 
-pub fn parse_trace_line(line: &str) -> io::Result<Option<(u64, u32)>> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with("step") || trimmed.starts_with('#') {
-        return Ok(None);
-    }
-
-    let mut parts = trimmed.split_whitespace();
-    let step = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing step field"))?;
-    let sample = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing sample field"))?;
-
-    let step = step.parse::<u64>().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid step value {step:?}: {e}"),
-        )
-    })?;
-    let sample = sample
-        .strip_prefix("0x")
-        .or_else(|| sample.strip_prefix("0X"))
-        .unwrap_or(sample);
-    let sample = u32::from_str_radix(sample, 16).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid sample value {sample:?}: {e}"),
-        )
-    })?;
-
-    Ok(Some((step, sample)))
-}
-
 fn is_packed_bcd(byte: u8) -> bool {
     (byte >> 4) <= 9 && (byte & 0x0F) <= 9
 }
@@ -259,7 +223,7 @@ fn format_axis(axis: AxisSnapshot) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_trace_line, FeedbackDecoder, TraceCycle};
+    use super::{FeedbackDecoder, TraceCycle};
 
     fn sample(data: u8, addr: u8, read: bool, clock_high: bool) -> u32 {
         (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | ((clock_high as u32) << 17)
@@ -272,18 +236,6 @@ mod tests {
         assert_eq!(cycle.data, 0x12);
         assert_eq!(cycle.addr, 0x80);
         assert!(!cycle.read);
-    }
-
-    #[test]
-    fn parser_skips_header_and_reads_hex_sample() {
-        assert!(parse_trace_line("step  sample      D    A   RnW CLK FREDn")
-            .expect("header")
-            .is_none());
-        let (step, sample_word) = parse_trace_line("0718  0x0003F101  01  F1   R   1    0")
-            .expect("line")
-            .expect("sample");
-        assert_eq!(step, 718);
-        assert_eq!(sample_word, 0x0003F101);
     }
 
     #[test]
