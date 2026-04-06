@@ -16,9 +16,12 @@ import usb.core
 import usb.util
 
 PACKET_MAGIC = 0xA5
-PROTOCOL_VERSION = 1
-PACKET_SIZE = 32
-PAYLOAD_SIZE = 20
+PROTOCOL_VERSION = 2
+HEADER_SIZE = 8
+CRC_SIZE = 4
+PACKET_SIZE = 64
+PAYLOAD_SIZE = PACKET_SIZE - HEADER_SIZE - CRC_SIZE
+TRACE_METADATA_SIZE = 8
 
 MSG_PING = 0x01
 MSG_TELEMETRY_SET = 0x10
@@ -76,8 +79,8 @@ class _Packet:
         if payload_len > PAYLOAD_SIZE:
             raise FredProtocolError(f"invalid payload length: {payload_len}")
 
-        expected_crc = struct.unpack_from("<I", raw, 28)[0]
-        actual_crc = binascii.crc32(raw[:28]) & 0xFFFFFFFF
+        expected_crc = struct.unpack_from("<I", raw, PACKET_SIZE - CRC_SIZE)[0]
+        actual_crc = binascii.crc32(raw[: PACKET_SIZE - CRC_SIZE]) & 0xFFFFFFFF
         if expected_crc != actual_crc:
             raise FredProtocolError("CRC mismatch")
 
@@ -125,6 +128,8 @@ class FredUsbClient:
             "flags": 0,
         }
         self._pending_capture_samples: List[int] = []
+        self._capture_dropped_total = 0
+        self._capture_rxstall_total = 0
 
         self._open()
 
@@ -305,9 +310,16 @@ class FredUsbClient:
         )
 
     def _decode_trace_samples(self, pkt: _Packet) -> List[int]:
+        if len(pkt.payload) >= TRACE_METADATA_SIZE:
+            self._capture_dropped_total = struct.unpack_from("<I", pkt.payload, 0)[0]
+            self._capture_rxstall_total = struct.unpack_from("<I", pkt.payload, 4)[0]
+            payload = pkt.payload[TRACE_METADATA_SIZE:]
+        else:
+            payload = pkt.payload
+
         samples: List[int] = []
-        for offset in range(0, len(pkt.payload) - (len(pkt.payload) % 4), 4):
-            samples.append(struct.unpack_from("<I", pkt.payload, offset)[0])
+        for offset in range(0, len(payload) - (len(payload) % 4), 4):
+            samples.append(struct.unpack_from("<I", payload, offset)[0])
         return samples
 
     def _drain_pending_capture_samples(self) -> List[int]:
@@ -328,7 +340,7 @@ class FredUsbClient:
             raise FredUsbError("device not open")
 
         try:
-            data = self._dev.read(self._ep_in, 64, timeout=timeout_ms)
+            data = self._dev.read(self._ep_in, PACKET_SIZE, timeout=timeout_ms)
         except usb.core.USBError as exc:
             # pyusb maps timeout to backend-specific errno (often 110).
             if getattr(exc, "errno", None) in (110, 60) or "timed out" in str(exc).lower():

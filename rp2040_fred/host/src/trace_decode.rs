@@ -213,7 +213,7 @@ impl FeedbackDecoder {
 
 pub fn parse_trace_line(line: &str) -> io::Result<Option<(u64, u32)>> {
     let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with("step") {
+    if trimmed.is_empty() || trimmed.starts_with("step") || trimmed.starts_with('#') {
         return Ok(None);
     }
 

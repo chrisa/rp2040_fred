@@ -163,14 +163,21 @@ fn monitor_usb_capture() -> io::Result<()> {
 
     println!("step  sample      D    A   RnW CLK FREDn");
     let mut i = 0usize;
+    let mut counters = TraceCaptureCounters::default();
 
     loop {
         let pkt = t.read_packet()?;
-        if pkt.msg_type != MsgType::TraceSample || pkt.payload_len < 4 {
+        let Some(trace) = pkt.decode_trace_samples() else {
             continue;
+        };
+
+        if let Some(comment) =
+            counters.update(trace.dropped_samples_total, trace.rx_stall_count_total)
+        {
+            println!("{comment}");
         }
-        for chunk in pkt.payload_used().chunks_exact(4) {
-            let sample = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+
+        for sample in trace.iter_samples() {
             let d = (sample & 0xFF) as u8;
             let a = ((sample >> 8) & 0xFF) as u8;
             let rnw = if ((sample >> 16) & 1) as u8 == 0 {
@@ -216,16 +223,22 @@ fn decode_usb_capture() -> io::Result<()> {
 
     let mut decoder = FeedbackDecoder::new();
     let mut sample_index = 0u64;
+    let mut counters = TraceCaptureCounters::default();
 
     print_decode_header();
     loop {
         let pkt = t.read_packet()?;
-        if pkt.msg_type != MsgType::TraceSample || pkt.payload_len < 4 {
+        let Some(trace) = pkt.decode_trace_samples() else {
             continue;
+        };
+
+        if let Some(comment) =
+            counters.update(trace.dropped_samples_total, trace.rx_stall_count_total)
+        {
+            println!("{comment}");
         }
 
-        for chunk in pkt.payload_used().chunks_exact(4) {
-            let sample = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for sample in trace.iter_samples() {
             if let Some(snapshot) = decoder.ingest_sample(sample_index, sample) {
                 print_decoded_snapshot(snapshot);
             }
@@ -247,4 +260,29 @@ fn print_decoded_snapshot(snapshot: FeedbackSnapshot) {
         snapshot.rpm_raw,
         snapshot.rpm_display
     );
+}
+
+#[derive(Default)]
+struct TraceCaptureCounters {
+    dropped_samples_total: u32,
+    rx_stall_count_total: u32,
+}
+
+impl TraceCaptureCounters {
+    fn update(&mut self, dropped_samples_total: u32, rx_stall_count_total: u32) -> Option<String> {
+        if dropped_samples_total == self.dropped_samples_total
+            && rx_stall_count_total == self.rx_stall_count_total
+        {
+            return None;
+        }
+
+        let dropped_delta = dropped_samples_total.wrapping_sub(self.dropped_samples_total);
+        let stall_delta = rx_stall_count_total.wrapping_sub(self.rx_stall_count_total);
+        self.dropped_samples_total = dropped_samples_total;
+        self.rx_stall_count_total = rx_stall_count_total;
+
+        Some(format!(
+            "# capture dropped_delta={dropped_delta} dropped_total={dropped_samples_total} rxstall_delta={stall_delta} rxstall_total={rx_stall_count_total}"
+        ))
+    }
 }

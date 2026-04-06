@@ -1,15 +1,18 @@
-use embassy_executor::Spawner;
+use core::hint::spin_loop;
+use core::ptr::addr_of_mut;
+
 use embassy_rp::bind_interrupts;
+use embassy_rp::multicore::{spawn_core1, Stack};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{
     Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use heapless::spsc::{Consumer, Producer, Queue};
-use portable_atomic::{AtomicBool, Ordering};
+use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
-use crate::resources::SnifferResources;
+use crate::resources::{Core1Resources, SnifferResources};
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 
 macro_rules! log_info {
@@ -22,9 +25,14 @@ bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
-const TRACE_SAMPLE_RING_LEN: usize = 2048;
+const TRACE_SAMPLE_RING_LEN: usize = 16_384;
+const CORE1_STACK_SIZE: usize = 4096;
+
 static TRACE_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(true);
+static TRACE_QUEUE_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+static TRACE_RXSTALL_COUNT: AtomicU32 = AtomicU32::new(0);
 static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
+static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 
 pub struct BridgeTransport {
     trace_samples: Consumer<'static, u32>,
@@ -33,13 +41,19 @@ pub struct BridgeTransport {
 }
 
 impl BridgeTransport {
-    pub fn new(spawner: &Spawner, sniffer_resources: SnifferResources) -> Self {
+    pub fn new(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
 
         TRACE_CAPTURE_ENABLED.store(true, Ordering::Relaxed);
-        spawner
-            .spawn(pio_capture_task(sniffer_resources, producer).expect("create pio capture task"));
+        TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
+        TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
+
+        spawn_core1(
+            core1_resources.core1,
+            unsafe { &mut *addr_of_mut!(CORE1_STACK) },
+            move || capture_core1_loop(sniffer_resources, producer),
+        );
 
         Self {
             trace_samples: consumer,
@@ -60,6 +74,9 @@ impl BridgeTransport {
                 } else {
                     self.capture_enabled = req.payload[0] != 0;
                     TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
+                    self.trace_seq = 1;
+                    TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
+                    TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
                     self.clear_trace_samples();
                     out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
                 }
@@ -96,7 +113,14 @@ impl BridgeTransport {
             return None;
         }
 
-        let pkt = Packet::trace_samples(self.trace_seq, &batch[..used]);
+        let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
+        let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
+        let pkt = Packet::trace_samples(
+            self.trace_seq,
+            dropped_samples_total,
+            rx_stall_count_total,
+            &batch[..used],
+        );
         self.trace_seq = self.trace_seq.wrapping_add(1);
         Some(pkt)
     }
@@ -114,11 +138,10 @@ impl BridgeTransport {
     }
 }
 
-#[embassy_executor::task]
-async fn pio_capture_task(
+fn capture_core1_loop(
     sniffer_resources: SnifferResources,
     mut trace_samples: Producer<'static, u32>,
-) {
+) -> ! {
     let program = pio::pio_file!(
         "../pio/passive_sniffer.pio",
         select_program("fred_passive_sniffer"),
@@ -178,20 +201,31 @@ async fn pio_capture_task(
     batch.set_enable(&mut pio.sm2, true);
     batch.execute();
 
-    log_info!("PIO initialised");
+    let _ = pio.sm2.rx().stalled();
+    log_info!("PIO initialised on core1");
 
     loop {
-        let raw_sample = pio.sm2.rx().wait_pull().await;
+        let mut drained = false;
+        while let Some(raw_sample) = pio.sm2.rx().try_pull() {
+            drained = true;
 
-        if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
-            continue;
+            if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
+                continue;
+            }
+
+            let sample = encode_trace_sample(raw_sample);
+            if trace_samples.enqueue(sample).is_err() {
+                TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
         }
 
-        let sample = encode_trace_sample(raw_sample);
+        if pio.sm2.rx().stalled() {
+            TRACE_RXSTALL_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
 
-        // Drop the newest sample on overflow, but keep draining the RX FIFO so
-        // the PIO state machine can continue running.
-        let _ = trace_samples.enqueue(sample);
+        if !drained {
+            spin_loop();
+        }
     }
 }
 

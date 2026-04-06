@@ -1,0 +1,82 @@
+TCL 202 Lathe Bus Protocol Notes
+================================
+
+Scope
+- These notes cover the feedback/DRO side of the BBC host <-> lathe protocol.
+- Source of truth is the 6502 ROM disassembly in `tcl202.asm`.
+- Passive sniffer traces are useful spot checks, but they are not a complete record because the PIO sniffer uses `push noblock` and can drop samples under load.
+
+Register Map
+- `FC80`: command write
+- `FCF0`: status read
+- `FCF1`: response read
+
+Relevant ROM locations
+- Register definitions: `tcl202.asm` lines 279-281
+- Busy/ready poll: `tcl202.asm` lines 2547-2551
+- Main feedback loop: `tcl202.asm` lines 2555-2590
+- Command cadence table: `tcl202.asm` lines 2592-2598
+- Pair-byte decode handler: `tcl202.asm` lines 2600-2628
+- Sign decode handler: `tcl202.asm` lines 2658-2678
+- RPM display rounding: `tcl202.asm` lines 2646-2653
+- Passive sniffer sample/drop behavior: `rp2040_fred/pio/passive_sniffer.pio` lines 23-33
+
+Host/Lathe Handshake
+1. Poll `FCF0` until bit 0 clears.
+2. Write one command byte to `FC80`.
+3. Poll `FCF0` again until bit 0 clears.
+4. Read one response byte from `FCF1`.
+
+Observed `FCF0` values in traces
+- Feedback trace: mostly `0x7D` while busy, `0x7C` when ready.
+- Program trace: mostly `0x3D` while busy, `0x3C` when ready.
+- The key part is bit 0. `1` means busy, `0` means ready.
+
+Feedback Command Cadence
+- The ROM cycles through this fixed table:
+  - `03, 02, 01, 00, 07, 06, 05, 04, 0D, 0C`
+- This is defined directly in `fred80_table` in `tcl202.asm`.
+
+Meaning of Each Command
+- `03`: X sign byte
+- `02`: X most-significant digit pair
+- `01`: X middle digit pair
+- `00`: X least-significant digit pair
+- `07`: Z sign byte
+- `06`: Z most-significant digit pair
+- `05`: Z middle digit pair
+- `04`: Z least-significant digit pair
+- `0D`: spindle RPM most-significant digit pair
+- `0C`: spindle RPM least-significant digit pair
+
+Response Encoding
+- `FCF1` data bytes are packed BCD, not binary counts.
+- High nibble = first decimal digit.
+- Low nibble = second decimal digit.
+- Sign bytes are special:
+  - `00` means positive
+  - any non-zero value means negative
+
+Examples
+- Response byte `0x52` decodes to decimal digits `5` and `2`.
+- X axis bytes `0x00 0x06 0x52` with positive sign decode to `+000652`.
+- RPM bytes `0x07 0x83` decode to raw `0783`.
+
+RPM Display Behavior In Original ROM
+- The host does poll RPM in the normal background cadence. It is not a special bus transaction.
+- However, when drawing the low RPM byte (`0C`), the ROM forces the final displayed digit to `0`.
+- So a raw RPM value like `0783` is displayed as `0780`.
+- This strongly suggests the original software deliberately suppresses the least-significant RPM digit, likely because it is noisy or visually unstable.
+
+Implication For Replacement Host
+- There is no low-level protocol reason to only read speed on demand.
+- A replacement RP2040/host stack can poll RPM continuously just like X and Z.
+- It should be safe to expose:
+  - raw RPM
+  - optionally a rounded/smoothed RPM for display
+
+Trace Caveat
+- The passive sniffer records completed and partial bus phases while `FRED_N` is active.
+- Because it uses `push noblock`, FIFO overflow silently drops samples.
+- That means command/response pairing in large captures can have gaps.
+- The ROM still gives the authoritative transaction structure above.

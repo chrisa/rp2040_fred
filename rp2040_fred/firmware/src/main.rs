@@ -20,7 +20,9 @@ use rp2040_fred_protocol::bridge_proto::{Packet, PACKET_SIZE};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-use crate::resources::{AssignedResources, MainResources, SnifferResources, UsbResources};
+use crate::resources::{
+    AssignedResources, Core1Resources, MainResources, SnifferResources, UsbResources,
+};
 use crate::transport::BridgeTransport;
 
 // #[cfg(not(feature = "defmt-log"))]
@@ -50,14 +52,14 @@ const USB_BACKLOG_POLL_US: u64 = 50;
 const USB_OUTGOING_BURST_PACKETS: usize = 16;
 
 #[embassy_executor::main]
-async fn main(spawner: Spawner) {
+async fn main(_spawner: Spawner) {
     ClockConfig::system_freq(125_000_000).expect("set clock failed?");
     let p = embassy_rp::init(Default::default());
     let r = split_resources!(p);
 
     log_info!("fw start: passive-capture default");
 
-    let mut bridge = BridgeTransport::new(&spawner, r.sniffer);
+    let mut bridge = BridgeTransport::new(r.core1, r.sniffer);
 
     let mut led = Output::new(r.main.led, Level::Low);
     led.set_high();
@@ -100,7 +102,7 @@ async fn main(spawner: Spawner) {
 
     let usb_fut = usb_device.run();
     let bridge_fut = async {
-        let mut rx_buf = [0u8; 64];
+        let mut rx_buf = [0u8; PACKET_SIZE];
         let mut replies = [Packet::ping(0), Packet::ping(0)];
 
         loop {

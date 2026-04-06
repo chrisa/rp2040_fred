@@ -2,6 +2,9 @@ use assign_resources::assign_resources;
 use embassy_rp::{peripherals, Peri};
 
 assign_resources! {
+    core1: Core1Resources {
+        core1: CORE1,
+    }
     usb: UsbResources {
         usb: USB,
     }

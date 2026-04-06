@@ -1,5 +1,4 @@
-use crate::resources::SnifferResources;
-use embassy_executor::Spawner;
+use crate::resources::{Core1Resources, SnifferResources};
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 use rp2040_fred_protocol::bridge_service::BridgeService;
 
@@ -9,7 +8,7 @@ pub struct BridgeTransport {
 }
 
 impl BridgeTransport {
-    pub fn new(_spawner: &Spawner, _sniffer: SnifferResources) -> Self {
+    pub fn new(_core1: Core1Resources, _sniffer: SnifferResources) -> Self {
         Self {
             bridge: BridgeService::new(),
             capture_enabled: true,

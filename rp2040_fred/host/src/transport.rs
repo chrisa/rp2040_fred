@@ -110,7 +110,7 @@ impl UsbTransport {
     }
 
     pub fn read_packet(&mut self) -> io::Result<Packet> {
-        let mut buf = [0u8; 64];
+        let mut buf = [0u8; PACKET_SIZE];
         let n = self
             .handle
             .read_bulk(self.in_ep, &mut buf, self.timeout)
