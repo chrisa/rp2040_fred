@@ -16,6 +16,7 @@ use static_cell::StaticCell;
 use crate::resources::{Core1Resources, SnifferResources};
 use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
+use rp2040_fred_protocol::dro_decode::{DroAssembler, DroSnapshot};
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
@@ -26,6 +27,8 @@ macro_rules! log_info {
 bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
+
+const FLAG_ENABLED: u8 = 1 << 0;
 
 const TRACE_SAMPLE_RING_LEN: usize = 16_384;
 const CORE1_STACK_SIZE: usize = 4096;
@@ -39,7 +42,9 @@ static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 pub struct PioTransport {
     trace_samples: Consumer<'static, u32>,
     capture_enabled: bool,
+    telemetry_enabled: bool,
     trace_seq: u16,
+    dro: DroAssembler,
 }
 
 impl PioTransport {
@@ -60,8 +65,10 @@ impl PioTransport {
 
         Self {
             trace_samples: consumer,
-            capture_enabled: true,
+            capture_enabled: false,
+            telemetry_enabled: false,
             trace_seq: 1,
+            dro: DroAssembler::new(),
         }
     }
 
@@ -69,6 +76,13 @@ impl PioTransport {
         while self.trace_samples.dequeue().is_some() {}
     }
 
+    fn flags(&self) -> u8 {
+        if self.telemetry_enabled {
+            FLAG_ENABLED
+        } else {
+            0
+        }
+    }
 }
 
 impl Transport for PioTransport {
@@ -83,6 +97,7 @@ impl Transport for PioTransport {
                 if req.payload_len < 1 {
                     out[0] = Packet::nack(req.seq, MsgType::CaptureSet as u8, 1);
                 } else {
+                    self.telemetry_enabled = req.payload[0] == 0;
                     self.capture_enabled = req.payload[0] != 0;
                     TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
                     self.trace_seq = 1;
@@ -90,6 +105,21 @@ impl Transport for PioTransport {
                     TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
                     self.clear_trace_samples();
                     out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
+                }
+                1
+            }
+            MsgType::TelemetrySet => {
+                if req.payload_len < 1 {
+                    out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 1);
+                } else {
+                    self.capture_enabled = req.payload[0] == 0;
+                    self.telemetry_enabled = req.payload[0] != 0;
+                    TRACE_CAPTURE_ENABLED.store(self.telemetry_enabled, Ordering::Relaxed); // weird, but must capture to decode
+                    self.trace_seq = 1;
+                    TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
+                    TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
+                    self.clear_trace_samples();
+                    out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
                 }
                 1
             }
@@ -105,12 +135,15 @@ impl Transport for PioTransport {
     }
 
     fn poll_outgoing_packet(&mut self) -> Option<Packet> {
-        if !self.capture_enabled || !self.trace_samples.ready() {
+        if (!self.capture_enabled && !self.telemetry_enabled) || !self.trace_samples.ready() {
             return None;
         }
 
         let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
         let mut used = 0usize;
+
+        let mut fc80 = 0u8;
+        let mut fcf1 = 0u8;
 
         while used < batch.len() {
             let Some(sample) = self.trace_samples.dequeue() else {
@@ -118,6 +151,22 @@ impl Transport for PioTransport {
             };
             batch[used] = sample;
             used += 1;
+
+            let d = (sample & 0xFF) as u8;
+            let a = ((sample >> 8) & 0xFF) as u8;
+            let is_write = ((sample >> 16) & 1) as u8 == 0;
+
+            if is_write && a == 0x80 {
+                fc80 = d;
+            }
+            if !is_write && a == 0xF1 && fc80 != 0x00 {
+                fcf1 = d;
+            }
+            
+            self.dro.on_fc80_fcf1(fc80, fcf1);
+
+            fc80 = 0;
+            fcf1 = 0;
         }
 
         if used == 0 {
@@ -126,14 +175,36 @@ impl Transport for PioTransport {
 
         let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
         let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
-        let pkt = Packet::trace_samples(
-            self.trace_seq,
-            dropped_samples_total,
-            rx_stall_count_total,
-            &batch[..used],
-        );
-        self.trace_seq = self.trace_seq.wrapping_add(1);
-        Some(pkt)
+
+        if self.capture_enabled {
+            let pkt = Packet::trace_samples(
+                self.trace_seq,
+                dropped_samples_total,
+                rx_stall_count_total,
+                &batch[..used],
+            );
+            self.trace_seq = self.trace_seq.wrapping_add(1);
+            return Some(pkt);
+        }
+
+        if self.telemetry_enabled {
+            let s = self.dro.snapshot();
+            let pkt = Packet::telemetry(
+                self.trace_seq,
+                0,
+                s.x_counts,
+                s.z_counts,
+                s.rpm,
+                self.flags(),
+            );
+            self.trace_seq = self.trace_seq.wrapping_add(1);
+            if self.telemetry_enabled {
+                return Some(pkt);
+            }
+            return Some(pkt);
+        }
+
+        None
     }
 
     fn post_send_delay_ms(&self, _pkt: &Packet) -> Option<u64> {
@@ -144,7 +215,6 @@ impl Transport for PioTransport {
         self.capture_enabled && self.trace_samples.ready()
     }
 }
-
 
 fn capture_core1_loop(
     sniffer_resources: SnifferResources,

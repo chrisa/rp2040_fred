@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["defmt-log","mock-bus"]
+default = ["defmt-log","pio-real"]
 mock-bus = []
 pio-real = []
 defmt-log = [
