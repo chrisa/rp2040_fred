@@ -5,7 +5,6 @@ use rp2040_fred_protocol::bridge_proto::{
     crc32_ieee, MsgType, Packet, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_SIZE,
     PROTOCOL_VERSION,
 };
-use rp2040_fred_protocol::bridge_service::BridgeService;
 use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
 
 const LEGACY_PROTOCOL_VERSION: u8 = 1;
@@ -17,30 +16,6 @@ const V2_PAYLOAD_SIZE: usize = V2_PACKET_SIZE - HEADER_SIZE - CRC_SIZE;
 
 pub trait HostTransport {
     fn transact(&mut self, req: Packet) -> io::Result<Vec<Packet>>;
-}
-
-pub struct MockTransport {
-    bridge: BridgeService,
-}
-
-impl MockTransport {
-    pub const fn new() -> Self {
-        Self {
-            bridge: BridgeService::new(),
-        }
-    }
-
-    pub fn next_packet(&mut self) -> Option<Packet> {
-        self.bridge.poll_telemetry_event()
-    }
-}
-
-impl HostTransport for MockTransport {
-    fn transact(&mut self, req: Packet) -> io::Result<Vec<Packet>> {
-        let mut out = [Packet::ping(0), Packet::ping(0)];
-        let n = self.bridge.handle_request(req, &mut out);
-        Ok(out[..n].to_vec())
-    }
 }
 
 pub struct UsbTransport {
@@ -230,37 +205,6 @@ fn io_other(e: UsbError) -> io::Error {
         _ => io::ErrorKind::Other,
     };
     io::Error::new(kind, e.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{HostTransport, MockTransport};
-    use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-
-    #[test]
-    fn ping_ack_roundtrip() {
-        let mut t = MockTransport::new();
-        let r = t.transact(Packet::ping(42)).expect("transact");
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].msg_type, MsgType::Ack);
-        assert_eq!(r[0].seq, 42);
-    }
-
-    #[test]
-    fn telemetry_enable_then_event() {
-        let mut t = MockTransport::new();
-        let _ = t
-            .transact(Packet::telemetry_set(1, true, 50))
-            .expect("telemetry_set");
-
-        let mut seen = 0usize;
-        for _ in 0..30 {
-            if t.next_packet().is_some() {
-                seen += 1;
-            }
-        }
-        assert!(seen >= 1);
-    }
 }
 
 fn decode_legacy_packet(raw: &[u8]) -> io::Result<Packet> {

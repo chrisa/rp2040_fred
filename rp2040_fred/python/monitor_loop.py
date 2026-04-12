@@ -7,19 +7,17 @@ from fred_client import FredUsbClient
 
 def main() -> None:
     client = FredUsbClient(0x2E8A, 0x000A)
-    client.enable_capture()
+    client.enable_polling(period_ms=25)
 
     try:
         while True:
-            samples = client.read_capture_samples(timeout_ms=50)
-            for sample in samples:
-                print(f"0x{sample:08X}")
+            print(client.refresh())
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
     finally:
         try:
-            client.disable_capture()
+            client.disable_polling()
         finally:
             client.close()
 

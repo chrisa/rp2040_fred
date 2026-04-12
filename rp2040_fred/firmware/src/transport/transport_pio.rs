@@ -2,6 +2,7 @@ use core::hint::spin_loop;
 use core::ptr::addr_of_mut;
 
 use embassy_rp::bind_interrupts;
+use embassy_rp::gpio::{Level, Output};
 use embassy_rp::multicore::{spawn_core1, Stack};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{
@@ -13,6 +14,7 @@ use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
 use crate::resources::{Core1Resources, SnifferResources};
+use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 
 macro_rules! log_info {
@@ -34,13 +36,14 @@ static TRACE_RXSTALL_COUNT: AtomicU32 = AtomicU32::new(0);
 static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 
-pub struct BridgeTransport {
+pub struct PioTransport {
     trace_samples: Consumer<'static, u32>,
     capture_enabled: bool,
     trace_seq: u16,
 }
 
-impl BridgeTransport {
+impl PioTransport {
+
     pub fn new(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
@@ -62,7 +65,15 @@ impl BridgeTransport {
         }
     }
 
-    pub fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+    fn clear_trace_samples(&mut self) {
+        while self.trace_samples.dequeue().is_some() {}
+    }
+
+}
+
+impl Transport for PioTransport {
+
+    fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
@@ -93,7 +104,7 @@ impl BridgeTransport {
         }
     }
 
-    pub fn poll_outgoing_packet(&mut self) -> Option<Packet> {
+    fn poll_outgoing_packet(&mut self) -> Option<Packet> {
         if !self.capture_enabled || !self.trace_samples.ready() {
             return None;
         }
@@ -125,23 +136,25 @@ impl BridgeTransport {
         Some(pkt)
     }
 
-    pub fn post_send_delay_ms(&self, _pkt: &Packet) -> Option<u64> {
+    fn post_send_delay_ms(&self, _pkt: &Packet) -> Option<u64> {
         None
     }
 
-    pub fn has_outgoing_backlog(&self) -> bool {
+    fn has_outgoing_backlog(&self) -> bool {
         self.capture_enabled && self.trace_samples.ready()
     }
-
-    fn clear_trace_samples(&mut self) {
-        while self.trace_samples.dequeue().is_some() {}
-    }
 }
+
 
 fn capture_core1_loop(
     sniffer_resources: SnifferResources,
     mut trace_samples: Producer<'static, u32>,
 ) -> ! {
+    let mut data_dir_a = Output::new(sniffer_resources.pin_26, Level::Low);
+    let mut data_dir_d = Output::new(sniffer_resources.pin_27, Level::Low);
+    data_dir_a.set_low();
+    data_dir_d.set_low();
+
     let program = pio::pio_file!(
         "../pio/passive_sniffer.pio",
         select_program("fred_passive_sniffer"),

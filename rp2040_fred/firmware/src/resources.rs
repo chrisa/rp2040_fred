@@ -29,11 +29,11 @@ assign_resources! {
         pin_16: PIN_16,
         pin_17: PIN_17,
         pin_20: PIN_20,
+        pin_26: PIN_26,
+        pin_27: PIN_27,
         pin_28: PIN_28,
     }
     main: MainResources {
         led: PIN_25,
-        pin_26: PIN_26,
-        pin_27: PIN_27,
     }
 }

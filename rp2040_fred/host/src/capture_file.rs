@@ -48,25 +48,6 @@ impl<W: Write> CaptureWriter<W> {
         self.inner.write_all(trace.packed_sample_bytes())?;
         Ok(())
     }
-
-    pub fn write_batch(
-        &mut self,
-        dropped_samples_total: u32,
-        rx_stall_count_total: u32,
-        samples: &[u32],
-    ) -> io::Result<()> {
-        let sample_count = u32::try_from(samples.len()).map_err(|_| {
-            io::Error::new(ErrorKind::InvalidInput, "too many samples in capture batch")
-        })?;
-
-        self.inner.write_all(&dropped_samples_total.to_le_bytes())?;
-        self.inner.write_all(&rx_stall_count_total.to_le_bytes())?;
-        self.inner.write_all(&sample_count.to_le_bytes())?;
-        for sample in samples {
-            self.inner.write_all(&pack_trace_sample(*sample))?;
-        }
-        Ok(())
-    }
 }
 
 pub struct CaptureReader<R> {

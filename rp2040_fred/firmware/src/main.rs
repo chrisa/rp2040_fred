@@ -3,6 +3,7 @@
 
 #[macro_use]
 mod resources;
+
 mod transport;
 
 use embassy_executor::Spawner;
@@ -23,13 +24,8 @@ use {defmt_rtt as _, panic_probe as _};
 use crate::resources::{
     AssignedResources, Core1Resources, MainResources, SnifferResources, UsbResources,
 };
-use crate::transport::BridgeTransport;
+use crate::transport::Transport;
 
-// #[cfg(not(feature = "defmt-log"))]
-// compile_error!("defmt-log feature must be enabled");
-
-// #[cfg(all(feature = "mock-bus", feature = "pio-real"))]
-// compile_error!("Use either `mock-bus` or `pio-real`, not both.");
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
@@ -51,23 +47,24 @@ const USB_IDLE_POLL_MS: u64 = 2;
 const USB_BACKLOG_POLL_US: u64 = 50;
 const USB_OUTGOING_BURST_PACKETS: usize = 16;
 
+// fn create_transport(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> impl Transport {
+
+//     transport
+// }
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     ClockConfig::system_freq(125_000_000).expect("set clock failed?");
     let p = embassy_rp::init(Default::default());
     let r = split_resources!(p);
 
-    log_info!("fw start: passive-capture default");
-
-    let mut bridge = BridgeTransport::new(r.core1, r.sniffer);
+    #[cfg(feature = "mock-bus")]
+    let mut transport = transport::transport_mock::MockTransport::new();
+    #[cfg(feature = "pio-real")]
+    let mut transport = transport::transport_pio::PioTransport::new(r.core1, r.sniffer);
 
     let mut led = Output::new(r.main.led, Level::Low);
     led.set_high();
-
-    let mut data_dir_a = Output::new(r.main.pin_26, Level::Low);
-    let mut data_dir_d = Output::new(r.main.pin_27, Level::Low);
-    data_dir_a.set_low();
-    data_dir_d.set_low();
 
     let driver = usb::Driver::new(r.usb.usb, Irqs);
     log_info!("usb driver initialized");
@@ -95,7 +92,7 @@ async fn main(_spawner: Spawner) {
     );
     builder.msos_descriptor(msos::windows_version::WIN10, 0x20);
 
-    let mut bridge_class =
+    let mut usb =
         CmsisDapV2Class::new(&mut builder, CMSIS_STATE.init(CmsisState::new()), 64, false);
     let mut usb_device = builder.build();
     log_info!("usb descriptors built");
@@ -107,13 +104,13 @@ async fn main(_spawner: Spawner) {
 
         loop {
             log_info!("waiting for USB host connection");
-            bridge_class.wait_connection().await;
+            usb.wait_connection().await;
             log_info!("USB host connected");
 
             'connected: loop {
                 match select(
-                    bridge_class.read_packet(&mut rx_buf),
-                    if bridge.has_outgoing_backlog() {
+                    usb.read_packet(&mut rx_buf),
+                    if transport.has_outgoing_backlog() {
                         Timer::after(Duration::from_micros(USB_BACKLOG_POLL_US))
                     } else {
                         Timer::after(Duration::from_millis(USB_IDLE_POLL_MS))
@@ -124,7 +121,7 @@ async fn main(_spawner: Spawner) {
                     Either::First(Ok(n)) => {
                         if n >= MIN_PACKET_SIZE {
                             let reply_count = match Packet::decode(&rx_buf[..n]) {
-                                Ok(req) => bridge.handle_request(req, &mut replies),
+                                Ok(req) => transport.handle_request(req, &mut replies),
                                 Err(_) => {
                                     replies[0] = Packet::nack(0, 0xFF, 0x02);
                                     1
@@ -134,7 +131,7 @@ async fn main(_spawner: Spawner) {
                             for pkt in replies.iter().take(reply_count) {
                                 let encoded = pkt.encode();
                                 let encoded_len = pkt.encoded_len();
-                                if bridge_class
+                                if usb
                                     .write_packet(&encoded[..encoded_len])
                                     .await
                                     .is_err()
@@ -155,12 +152,12 @@ async fn main(_spawner: Spawner) {
                 }
 
                 for _ in 0..USB_OUTGOING_BURST_PACKETS {
-                    let Some(pkt) = bridge.poll_outgoing_packet() else {
+                    let Some(pkt) = transport.poll_outgoing_packet() else {
                         break;
                     };
                     let encoded = pkt.encode();
                     let encoded_len = pkt.encoded_len();
-                    if bridge_class
+                    if usb
                         .write_packet(&encoded[..encoded_len])
                         .await
                         .is_err()
@@ -168,7 +165,7 @@ async fn main(_spawner: Spawner) {
                         log_warn!("USB telemetry write failed; dropping connection");
                         break 'connected;
                     }
-                    if let Some(period_ms) = bridge.post_send_delay_ms(&pkt) {
+                    if let Some(period_ms) = transport.post_send_delay_ms(&pkt) {
                         Timer::after(Duration::from_millis(period_ms)).await;
                     }
                 }

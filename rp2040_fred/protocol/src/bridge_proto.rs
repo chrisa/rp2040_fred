@@ -20,6 +20,7 @@ pub enum MsgType {
     UnitCfg = 0x11,
     SnapshotReq = 0x12,
     CaptureSet = 0x13,
+    MockSet = 0x14,
     Ack = 0x80,
     Nack = 0x81,
     Telemetry = 0x90,
@@ -35,6 +36,7 @@ impl MsgType {
             0x11 => Some(Self::UnitCfg),
             0x12 => Some(Self::SnapshotReq),
             0x13 => Some(Self::CaptureSet),
+            0x14 => Some(Self::MockSet),
             0x80 => Some(Self::Ack),
             0x81 => Some(Self::Nack),
             0x90 => Some(Self::Telemetry),
@@ -183,6 +185,11 @@ impl Packet {
         Self::new(MsgType::CaptureSet, seq, &payload).expect("valid capture_set")
     }
 
+    pub fn mock_set(seq: u16, enable: bool) -> Self {
+        let payload = [enable as u8];
+        Self::new(MsgType::MockSet, seq, &payload).expect("valid mock_set")
+    }
+
     pub fn ack(seq: u16, acked_type: MsgType, status: u8) -> Self {
         let payload = [acked_type as u8, status];
         Self::new(MsgType::Ack, seq, &payload).expect("valid ack")
@@ -272,12 +279,12 @@ pub fn pack_trace_sample(sample: u32) -> [u8; TRACE_PACKED_SAMPLE_SIZE] {
     [
         (sample & 0xFF) as u8,
         ((sample >> 8) & 0xFF) as u8,
-        ((sample >> 16) & 0x01) as u8,
+        ((sample >> 16) & 0xFF) as u8,
     ]
 }
 
 pub fn unpack_trace_sample(packed: [u8; TRACE_PACKED_SAMPLE_SIZE]) -> u32 {
-    (packed[0] as u32) | ((packed[1] as u32) << 8) | (((packed[2] & 0x01) as u32) << 16) | (1 << 17)
+    (packed[0] as u32) | ((packed[1] as u32) << 8) | (((packed[2]) as u32) << 16)
 }
 
 pub fn crc32_ieee(data: &[u8]) -> u32 {

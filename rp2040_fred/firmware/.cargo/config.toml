@@ -11,7 +11,7 @@ runner = "probe-rs run --chip RP2040 --probe 2e8a:000c"
 # ]
 
 [alias]
-fw-build = "build"
-fw-run = "run"
+fw-build = "build --no-default-features --features mock-bus,defmt-log"
+fw-run = "run --no-default-features --features mock-bus,defmt-log"
 fw-build-pio = "build --no-default-features --features pio-real,defmt-log"
 fw-run-pio = "run --no-default-features --features pio-real,defmt-log"

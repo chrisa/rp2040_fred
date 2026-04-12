@@ -1,4 +1,3 @@
-use std::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
     pub data: u8,
@@ -8,7 +7,8 @@ pub struct TraceCycle {
 
 impl TraceCycle {
     pub fn from_sample(sample: u32) -> Option<Self> {
-        let clock_high = ((sample >> 17) & 1) != 0;
+        // let clock_high = ((sample >> 17) & 1) != 0;
+        let clock_high = true;
         let fred_selected = ((sample >> 20) & 1) == 0;
 
         if !clock_high || !fred_selected {
@@ -38,29 +38,6 @@ pub struct FeedbackSnapshot {
     pub rpm_display: u16,
 }
 
-impl FeedbackSnapshot {
-    pub fn x_digits(self) -> String {
-        format_axis(self.x)
-    }
-
-    pub fn z_digits(self) -> String {
-        format_axis(self.z)
-    }
-}
-
-impl fmt::Display for FeedbackSnapshot {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:08}  {}  {}  {:04}  {:04}",
-            self.sample_index,
-            self.x_digits(),
-            self.z_digits(),
-            self.rpm_raw,
-            self.rpm_display
-        )
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct AxisState {
@@ -215,10 +192,6 @@ fn is_packed_bcd(byte: u8) -> bool {
 
 fn bcd_pair_value(byte: u8) -> u32 {
     ((byte >> 4) as u32) * 10 + (byte & 0x0F) as u32
-}
-
-fn format_axis(axis: AxisSnapshot) -> String {
-    format!("{}{:06}", if axis.negative { "-" } else { "+" }, axis.value)
 }
 
 #[cfg(test)]

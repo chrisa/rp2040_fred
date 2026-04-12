@@ -1,11 +1,13 @@
 #[cfg(feature = "mock-bus")]
-#[path = "transport_mock.rs"]
-mod transport_impl;
+pub mod transport_mock;
 #[cfg(feature = "pio-real")]
-#[path = "transport_pio.rs"]
-mod transport_impl;
+pub mod transport_pio;
 
-#[cfg(feature = "mock-bus")]
-pub use transport_impl::BridgeTransport;
-#[cfg(feature = "pio-real")]
-pub use transport_impl::BridgeTransport;
+use rp2040_fred_protocol::bridge_proto::Packet;
+
+pub trait Transport {
+    fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize;
+    fn poll_outgoing_packet(&mut self) -> Option<Packet>;
+    fn post_send_delay_ms(&self, pkt: &Packet) -> Option<u64>;
+    fn has_outgoing_backlog(&self) -> bool;
+}

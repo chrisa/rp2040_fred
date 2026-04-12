@@ -1,12 +1,13 @@
 #![allow(dead_code)]
 
-use crate::bridge_proto::{MsgType, Packet};
-use crate::dro_decode::{DroAssembler, DroSnapshot};
-use crate::mock_bus::MockBusRunner;
+use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
+use rp2040_fred_protocol::dro_decode::{DroAssembler, DroSnapshot};
+use super::mock_bus::MockBusRunner;
 
 pub const FLAG_ENABLED: u8 = 1 << 0;
 
 pub struct BridgeService {
+    capture_enabled: bool,
     telemetry_enabled: bool,
     telemetry_period_ms: u16,
     tick: u32,
@@ -21,6 +22,7 @@ pub struct BridgeService {
 impl BridgeService {
     pub const fn new() -> Self {
         Self {
+            capture_enabled: false,
             telemetry_enabled: false,
             telemetry_period_ms: 100,
             tick: 0,
@@ -45,24 +47,47 @@ impl BridgeService {
                     return 1;
                 }
                 self.telemetry_enabled = req.payload[0] != 0;
+                defmt::debug!("telemetry_enabled: {}", self.telemetry_enabled);
                 if req.payload_len >= 3 {
                     self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
                 }
                 out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
                 1
             }
-            MsgType::SnapshotReq => {
-                out[0] = Packet::telemetry(
-                    req.seq,
-                    self.tick,
-                    self.snapshot().x_counts,
-                    self.snapshot().z_counts,
-                    self.snapshot().rpm,
-                    self.flags(),
-                );
-                out[1] = Packet::ack(req.seq, MsgType::SnapshotReq, 0);
-                2
+            MsgType::CaptureSet => {
+                if req.payload_len < 1 {
+                    out[0] = Packet::nack(req.seq, MsgType::CaptureSet as u8, 1);
+                    return 1;
+                }
+                self.capture_enabled = req.payload[0] != 0;
+                defmt::debug!("capture_enabled: {}", self.capture_enabled);
+                if req.payload_len >= 3 {
+                    self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
+                }
+                out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
+                1
             }
+            // MsgType::SnapshotReq => {
+            //     if self.telemetry_enabled {
+            //         out[0] = Packet::telemetry(
+            //             req.seq,
+            //             self.tick,
+            //             self.snapshot().x_counts,
+            //             self.snapshot().z_counts,
+            //             self.snapshot().rpm,
+            //             self.flags(),
+            //         );
+            //         out[1] = Packet::ack(req.seq, MsgType::SnapshotReq, 0);
+            //         return 2;
+            //     }
+            //     if self.capture_enabled {
+            //         out[0] = Packet::trace_sample(req.seq, sample_bits);
+            //         out[1] = Packet::ack(req.seq, MsgType::SnapshotReq, 0);
+            //         return 2;
+            //     }
+            //     out[0] = Packet::nack(req.seq, req.msg_type as u8, 0xFE);
+            //     1
+            // }
             _ => {
                 out[0] = Packet::nack(req.seq, req.msg_type as u8, 0xFE);
                 1
@@ -70,8 +95,8 @@ impl BridgeService {
         }
     }
 
-    pub fn poll_telemetry_event(&mut self) -> Option<Packet> {
-        if !self.telemetry_enabled {
+    pub fn poll_outgoing_packet(&mut self) -> Option<Packet> {
+        if !self.telemetry_enabled && !self.capture_enabled {
             return None;
         }
 
@@ -81,21 +106,26 @@ impl BridgeService {
         self.dro.on_fc80_fcf1(frame.cmd_fc80, frame.response_fcf1);
 
         // Emit one telemetry packet per full DRO command cadence.
-        if frame.cmd_fc80 != 0x0C {
-            return None;
+        if self.capture_enabled {
+            return Some(Packet::trace_samples(self.bus_cycles as u16, 0, 0, &frame.sample_words()));
+        }
+        if frame.cmd_fc80 == 0x0C {
+            let s = self.snapshot();
+            let pkt = Packet::telemetry(
+                self.telemetry_seq,
+                self.tick,
+                s.x_counts,
+                s.z_counts,
+                s.rpm,
+                self.flags(),
+            );
+            self.telemetry_seq = self.telemetry_seq.wrapping_add(1);
+            if self.telemetry_enabled {
+                return Some(pkt);
+            }
         }
 
-        let s = self.snapshot();
-        let pkt = Packet::telemetry(
-            self.telemetry_seq,
-            self.tick,
-            s.x_counts,
-            s.z_counts,
-            s.rpm,
-            self.flags(),
-        );
-        self.telemetry_seq = self.telemetry_seq.wrapping_add(1);
-        Some(pkt)
+        None
     }
 
     pub fn health_packet(&mut self) -> Packet {

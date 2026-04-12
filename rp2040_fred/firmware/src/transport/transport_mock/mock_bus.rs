@@ -1,4 +1,4 @@
-use crate::protocol::{DroProtocolEngine, FredReply};
+use super::protocol::{DroProtocolEngine, FredReply};
 
 pub const DRO_CADENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
 
@@ -7,6 +7,27 @@ pub struct MockBusFrame {
     pub cmd_fc80: u8,
     pub status_fcf0: u8,
     pub response_fcf1: u8,
+}
+
+const WRITE: u8 = 1;
+const READ:  u8 = 0;
+const CLOCK_H: u8 = 1 << 1;
+
+impl MockBusFrame {
+    pub fn sample_bytes(&self) -> [u8; 6] {
+        [
+            self.cmd_fc80,      0x80, WRITE | CLOCK_H,
+            self.response_fcf1, 0xF1, READ  | CLOCK_H,
+        ]
+    }
+
+    pub fn sample_words(&self) -> [u32; 2] {
+        let b = self.sample_bytes();
+        [
+            (0u32 << 24) | (b[2] as u32) << 16 | (b[1] as u32) << 8 | b[0] as u32,
+            (0u32 << 24) | (b[5] as u32) << 16 | (b[4] as u32) << 8 | b[3] as u32,
+        ]
+    }
 }
 
 pub struct MockBusRunner {
