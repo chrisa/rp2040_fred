@@ -46,6 +46,7 @@ pub struct PioTransport {
     trace_seq: u16,
     decoder: FeedbackDecoder,
     current_snapshot: FeedbackSnapshot,
+    telemetry_period_ms: u16,
 }
 
 impl PioTransport {
@@ -76,7 +77,8 @@ impl PioTransport {
                 z: AxisSnapshot { negative: false, value: 0 },
                 rpm_display: 0,
                 rpm_raw: 0,
-            }
+            },
+            telemetry_period_ms: 100,
         }
     }
 
@@ -127,6 +129,9 @@ impl Transport for PioTransport {
                     TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
                     TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
                     self.clear_trace_samples();
+                    if req.payload_len >= 3 {
+                        self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
+                    }
                     out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
                 }
                 1
@@ -200,6 +205,9 @@ impl Transport for PioTransport {
     }
 
     fn post_send_delay_ms(&self, _pkt: &Packet) -> Option<u64> {
+        if self.telemetry_enabled {
+            return Some(self.telemetry_period_ms.max(1) as u64);
+        }
         None
     }
 
