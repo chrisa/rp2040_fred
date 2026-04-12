@@ -29,6 +29,12 @@ pub struct AxisSnapshot {
     pub value: u32,
 }
 
+impl AxisSnapshot {
+    pub fn count(&self) -> i32 {
+        if self.negative { self.value as i32 * -1 } else { self.value as i32 }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeedbackSnapshot {
     pub sample_index: u64,

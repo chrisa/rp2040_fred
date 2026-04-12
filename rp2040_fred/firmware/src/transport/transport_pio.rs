@@ -3,7 +3,7 @@ use core::ptr::addr_of_mut;
 
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::multicore::{spawn_core1, Stack};
+use embassy_rp::multicore::{Stack, current_core, spawn_core1};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{
     Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
@@ -16,7 +16,7 @@ use static_cell::StaticCell;
 use crate::resources::{Core1Resources, SnifferResources};
 use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
-use rp2040_fred_protocol::dro_decode::{DroAssembler, DroSnapshot};
+use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
@@ -44,7 +44,8 @@ pub struct PioTransport {
     capture_enabled: bool,
     telemetry_enabled: bool,
     trace_seq: u16,
-    dro: DroAssembler,
+    decoder: FeedbackDecoder,
+    current_snapshot: FeedbackSnapshot,
 }
 
 impl PioTransport {
@@ -68,7 +69,14 @@ impl PioTransport {
             capture_enabled: false,
             telemetry_enabled: false,
             trace_seq: 1,
-            dro: DroAssembler::new(),
+            decoder: FeedbackDecoder::new(),
+            current_snapshot: FeedbackSnapshot {
+                sample_index: 0,
+                x: AxisSnapshot { negative: false, value: 0 },
+                z: AxisSnapshot { negative: false, value: 0 },
+                rpm_display: 0,
+                rpm_raw: 0,
+            }
         }
     }
 
@@ -142,9 +150,6 @@ impl Transport for PioTransport {
         let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
         let mut used = 0usize;
 
-        let mut fc80 = 0u8;
-        let mut fcf1 = 0u8;
-
         while used < batch.len() {
             let Some(sample) = self.trace_samples.dequeue() else {
                 break;
@@ -152,21 +157,9 @@ impl Transport for PioTransport {
             batch[used] = sample;
             used += 1;
 
-            let d = (sample & 0xFF) as u8;
-            let a = ((sample >> 8) & 0xFF) as u8;
-            let is_write = ((sample >> 16) & 1) as u8 == 0;
-
-            if is_write && a == 0x80 {
-                fc80 = d;
+            if let Some(snapshot) = self.decoder.ingest_sample(self.trace_seq as u64, sample) {
+                self.current_snapshot = snapshot;
             }
-            if !is_write && a == 0xF1 && fc80 != 0x00 {
-                fcf1 = d;
-            }
-            
-            self.dro.on_fc80_fcf1(fc80, fcf1);
-
-            fc80 = 0;
-            fcf1 = 0;
         }
 
         if used == 0 {
@@ -188,13 +181,12 @@ impl Transport for PioTransport {
         }
 
         if self.telemetry_enabled {
-            let s = self.dro.snapshot();
             let pkt = Packet::telemetry(
                 self.trace_seq,
                 0,
-                s.x_counts,
-                s.z_counts,
-                s.rpm,
+                self.current_snapshot.x.count(),
+                self.current_snapshot.z.count(),
+                self.current_snapshot.rpm_display,
                 self.flags(),
             );
             self.trace_seq = self.trace_seq.wrapping_add(1);
