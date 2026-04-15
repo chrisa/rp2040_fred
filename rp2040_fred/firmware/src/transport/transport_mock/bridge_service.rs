@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
+use super::mock_bus::MockBusRunner;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 use rp2040_fred_protocol::dro_decode::{DroAssembler, DroSnapshot};
-use super::mock_bus::MockBusRunner;
 
 pub const FLAG_ENABLED: u8 = 1 << 0;
 
@@ -107,7 +107,12 @@ impl BridgeService {
 
         // Emit one telemetry packet per full DRO command cadence.
         if self.capture_enabled {
-            return Some(Packet::trace_samples(self.bus_cycles as u16, 0, 0, &frame.sample_words()));
+            return Some(Packet::trace_samples(
+                self.bus_cycles as u16,
+                0,
+                0,
+                &frame.sample_words(),
+            ));
         }
         if frame.cmd_fc80 == 0x0C {
             let s = self.snapshot();

@@ -3,7 +3,7 @@ use core::ptr::addr_of_mut;
 
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::multicore::{Stack, current_core, spawn_core1};
+use embassy_rp::multicore::{spawn_core1, Stack};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{
     Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
@@ -43,14 +43,16 @@ pub struct PioTransport {
     trace_samples: Consumer<'static, u32>,
     capture_enabled: bool,
     telemetry_enabled: bool,
-    trace_seq: u16,
+    packet_seq: u16,
+    sample_seq: u64,
     decoder: FeedbackDecoder,
     current_snapshot: FeedbackSnapshot,
+    snapshot_valid: bool,
     telemetry_period_ms: u16,
+    next_telemetry_due_ms: u64,
 }
 
 impl PioTransport {
-
     pub fn new(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
@@ -69,21 +71,54 @@ impl PioTransport {
             trace_samples: consumer,
             capture_enabled: false,
             telemetry_enabled: false,
-            trace_seq: 1,
+            packet_seq: 1,
+            sample_seq: 0,
             decoder: FeedbackDecoder::new(),
             current_snapshot: FeedbackSnapshot {
                 sample_index: 0,
-                x: AxisSnapshot { negative: false, value: 0 },
-                z: AxisSnapshot { negative: false, value: 0 },
+                x: AxisSnapshot {
+                    negative: false,
+                    value: 0,
+                },
+                z: AxisSnapshot {
+                    negative: false,
+                    value: 0,
+                },
                 rpm_display: 0,
                 rpm_raw: 0,
             },
+            snapshot_valid: false,
             telemetry_period_ms: 100,
+            next_telemetry_due_ms: 0,
         }
     }
 
     fn clear_trace_samples(&mut self) {
         while self.trace_samples.dequeue().is_some() {}
+    }
+
+    fn reset_stream_state(&mut self) {
+        self.packet_seq = 1;
+        self.sample_seq = 0;
+        self.decoder = FeedbackDecoder::new();
+        self.current_snapshot = FeedbackSnapshot {
+            sample_index: 0,
+            x: AxisSnapshot {
+                negative: false,
+                value: 0,
+            },
+            z: AxisSnapshot {
+                negative: false,
+                value: 0,
+            },
+            rpm_display: 0,
+            rpm_raw: 0,
+        };
+        self.snapshot_valid = false;
+        self.next_telemetry_due_ms = 0;
+        TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
+        TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
+        self.clear_trace_samples();
     }
 
     fn flags(&self) -> u8 {
@@ -96,7 +131,6 @@ impl PioTransport {
 }
 
 impl Transport for PioTransport {
-
     fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
@@ -110,10 +144,7 @@ impl Transport for PioTransport {
                     self.telemetry_enabled = req.payload[0] == 0;
                     self.capture_enabled = req.payload[0] != 0;
                     TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
-                    self.trace_seq = 1;
-                    TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
-                    TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
-                    self.clear_trace_samples();
+                    self.reset_stream_state();
                     out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
                 }
                 1
@@ -125,12 +156,10 @@ impl Transport for PioTransport {
                     self.capture_enabled = req.payload[0] == 0;
                     self.telemetry_enabled = req.payload[0] != 0;
                     TRACE_CAPTURE_ENABLED.store(self.telemetry_enabled, Ordering::Relaxed); // weird, but must capture to decode
-                    self.trace_seq = 1;
-                    TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
-                    TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
-                    self.clear_trace_samples();
+                    self.reset_stream_state();
                     if req.payload_len >= 3 {
-                        self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
+                        self.telemetry_period_ms =
+                            u16::from_le_bytes([req.payload[1], req.payload[2]]);
                     }
                     out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
                 }
@@ -147,72 +176,85 @@ impl Transport for PioTransport {
         }
     }
 
-    fn poll_outgoing_packet(&mut self) -> Option<Packet> {
-        if (!self.capture_enabled && !self.telemetry_enabled) || !self.trace_samples.ready() {
-            return None;
+    fn process_pending_work(&mut self, budget: usize) {
+        if !self.telemetry_enabled {
+            return;
         }
 
-        let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
-        let mut used = 0usize;
-
-        while used < batch.len() {
+        let mut processed = 0usize;
+        while processed < budget {
             let Some(sample) = self.trace_samples.dequeue() else {
                 break;
             };
-            batch[used] = sample;
-            used += 1;
 
-            if let Some(snapshot) = self.decoder.ingest_sample(self.trace_seq as u64, sample) {
+            if let Some(snapshot) = self.decoder.ingest_sample(self.sample_seq, sample) {
                 self.current_snapshot = snapshot;
+                self.snapshot_valid = true;
             }
+            self.sample_seq = self.sample_seq.wrapping_add(1);
+            processed += 1;
         }
+    }
 
-        if used == 0 {
-            return None;
-        }
-
-        let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
-        let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
-
+    fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
         if self.capture_enabled {
+            let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
+            let mut used = 0usize;
+
+            while used < batch.len() {
+                let Some(sample) = self.trace_samples.dequeue() else {
+                    break;
+                };
+                batch[used] = sample;
+                used += 1;
+            }
+
+            if used == 0 {
+                return None;
+            }
+
+            let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
+            let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
             let pkt = Packet::trace_samples(
-                self.trace_seq,
+                self.packet_seq,
                 dropped_samples_total,
                 rx_stall_count_total,
                 &batch[..used],
             );
-            self.trace_seq = self.trace_seq.wrapping_add(1);
+            self.packet_seq = self.packet_seq.wrapping_add(1);
             return Some(pkt);
         }
 
         if self.telemetry_enabled {
+            if !self.snapshot_valid || now_ms < self.next_telemetry_due_ms {
+                return None;
+            }
+
             let pkt = Packet::telemetry(
-                self.trace_seq,
+                self.packet_seq,
                 0,
                 self.current_snapshot.x.count(),
                 self.current_snapshot.z.count(),
                 self.current_snapshot.rpm_display,
                 self.flags(),
             );
-            self.trace_seq = self.trace_seq.wrapping_add(1);
-            if self.telemetry_enabled {
-                return Some(pkt);
-            }
+            self.packet_seq = self.packet_seq.wrapping_add(1);
+            self.next_telemetry_due_ms = now_ms + self.telemetry_period_ms.max(1) as u64;
             return Some(pkt);
         }
 
         None
     }
 
-    fn post_send_delay_ms(&self, _pkt: &Packet) -> Option<u64> {
-        if self.telemetry_enabled {
-            return Some(self.telemetry_period_ms.max(1) as u64);
-        }
-        None
+    fn has_decode_work(&self) -> bool {
+        self.telemetry_enabled && self.trace_samples.ready()
     }
 
-    fn has_outgoing_backlog(&self) -> bool {
-        self.capture_enabled && self.trace_samples.ready()
+    fn has_outgoing_packet(&self, now_ms: u64) -> bool {
+        if self.capture_enabled {
+            return self.trace_samples.ready();
+        }
+        self.telemetry_enabled && self.snapshot_valid && now_ms >= self.next_telemetry_due_ms
     }
 }
 

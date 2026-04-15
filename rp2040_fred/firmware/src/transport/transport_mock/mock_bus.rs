@@ -10,14 +10,18 @@ pub struct MockBusFrame {
 }
 
 const WRITE: u8 = 1;
-const READ:  u8 = 0;
+const READ: u8 = 0;
 const CLOCK_H: u8 = 1 << 1;
 
 impl MockBusFrame {
     pub fn sample_bytes(&self) -> [u8; 6] {
         [
-            self.cmd_fc80,      0x80, WRITE | CLOCK_H,
-            self.response_fcf1, 0xF1, READ  | CLOCK_H,
+            self.cmd_fc80,
+            0x80,
+            WRITE | CLOCK_H,
+            self.response_fcf1,
+            0xF1,
+            READ | CLOCK_H,
         ]
     }
 

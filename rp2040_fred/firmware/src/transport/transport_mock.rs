@@ -1,53 +1,59 @@
 use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 
-mod mock_bus;
 mod bridge_service;
+mod mock_bus;
 mod protocol;
 
 use bridge_service::BridgeService;
 
 pub struct MockTransport {
     bridge: BridgeService,
-    capture_enabled: bool,
+    next_due_ms: u64,
 }
 
 impl MockTransport {
     pub fn new() -> Self {
         Self {
             bridge: BridgeService::new(),
-            capture_enabled: true,
+            next_due_ms: 0,
         }
     }
 }
 
 impl Transport for MockTransport {
-
     fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+        self.next_due_ms = 0;
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
                 1
             }
-            _ => {
-                self.bridge.handle_request(req, out)
-            }
+            _ => self.bridge.handle_request(req, out),
         }
     }
 
-    fn poll_outgoing_packet(&mut self) -> Option<Packet> {
-        self.bridge.poll_outgoing_packet()
-    }
+    fn process_pending_work(&mut self, _budget: usize) {}
 
-    fn post_send_delay_ms(&self, pkt: &Packet) -> Option<u64> {
-        if self.capture_enabled || pkt.msg_type != MsgType::Telemetry {
-            None
+    fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
+        if now_ms < self.next_due_ms {
+            return None;
+        }
+
+        let pkt = self.bridge.poll_outgoing_packet()?;
+        if pkt.msg_type == MsgType::Telemetry {
+            self.next_due_ms = now_ms + self.bridge.telemetry_period_ms().max(1) as u64;
         } else {
-            Some(self.bridge.telemetry_period_ms().max(1) as u64)
+            self.next_due_ms = now_ms;
         }
+        Some(pkt)
     }
 
-    fn has_outgoing_backlog(&self) -> bool {
+    fn has_decode_work(&self) -> bool {
         false
+    }
+
+    fn has_outgoing_packet(&self, now_ms: u64) -> bool {
+        now_ms >= self.next_due_ms
     }
 }

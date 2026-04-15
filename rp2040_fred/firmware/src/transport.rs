@@ -7,7 +7,8 @@ use rp2040_fred_protocol::bridge_proto::Packet;
 
 pub trait Transport {
     fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize;
-    fn poll_outgoing_packet(&mut self) -> Option<Packet>;
-    fn post_send_delay_ms(&self, pkt: &Packet) -> Option<u64>;
-    fn has_outgoing_backlog(&self) -> bool;
+    fn process_pending_work(&mut self, budget: usize);
+    fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet>;
+    fn has_decode_work(&self) -> bool;
+    fn has_outgoing_packet(&self, now_ms: u64) -> bool;
 }

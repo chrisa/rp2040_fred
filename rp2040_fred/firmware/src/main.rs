@@ -11,7 +11,7 @@ use embassy_futures::join::join;
 use embassy_futures::select::{select, Either};
 use embassy_rp::{bind_interrupts, usb};
 use embassy_rp::{clocks::ClockConfig, gpio};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use embassy_usb::class::cmsis_dap_v2::{CmsisDapV2Class, State as CmsisState};
 use embassy_usb::msos;
 use embassy_usb::{Builder, Config};
@@ -25,7 +25,6 @@ use crate::resources::{
     AssignedResources, Core1Resources, MainResources, SnifferResources, UsbResources,
 };
 use crate::transport::Transport;
-
 
 macro_rules! log_info {
     ($($arg:tt)*) => {
@@ -46,6 +45,7 @@ bind_interrupts!(struct Irqs {
 const USB_IDLE_POLL_MS: u64 = 2;
 const USB_BACKLOG_POLL_US: u64 = 50;
 const USB_OUTGOING_BURST_PACKETS: usize = 16;
+const USB_DECODE_BURST_SAMPLES: usize = 512;
 
 // fn create_transport(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> impl Transport {
 
@@ -108,9 +108,10 @@ async fn main(_spawner: Spawner) {
             log_info!("USB host connected");
 
             'connected: loop {
+                let now_ms = Instant::now().as_millis();
                 match select(
                     usb.read_packet(&mut rx_buf),
-                    if transport.has_outgoing_backlog() {
+                    if transport.has_decode_work() || transport.has_outgoing_packet(now_ms) {
                         Timer::after(Duration::from_micros(USB_BACKLOG_POLL_US))
                     } else {
                         Timer::after(Duration::from_millis(USB_IDLE_POLL_MS))
@@ -131,11 +132,7 @@ async fn main(_spawner: Spawner) {
                             for pkt in replies.iter().take(reply_count) {
                                 let encoded = pkt.encode();
                                 let encoded_len = pkt.encoded_len();
-                                if usb
-                                    .write_packet(&encoded[..encoded_len])
-                                    .await
-                                    .is_err()
-                                {
+                                if usb.write_packet(&encoded[..encoded_len]).await.is_err() {
                                     log_warn!("USB write failed; dropping connection");
                                     break 'connected;
                                 } else {
@@ -151,22 +148,18 @@ async fn main(_spawner: Spawner) {
                     Either::Second(()) => {}
                 }
 
+                transport.process_pending_work(USB_DECODE_BURST_SAMPLES);
+
                 for _ in 0..USB_OUTGOING_BURST_PACKETS {
-                    let Some(pkt) = transport.poll_outgoing_packet() else {
+                    let now_ms = Instant::now().as_millis();
+                    let Some(pkt) = transport.poll_outgoing_packet(now_ms) else {
                         break;
                     };
                     let encoded = pkt.encode();
                     let encoded_len = pkt.encoded_len();
-                    if usb
-                        .write_packet(&encoded[..encoded_len])
-                        .await
-                        .is_err()
-                    {
+                    if usb.write_packet(&encoded[..encoded_len]).await.is_err() {
                         log_warn!("USB telemetry write failed; dropping connection");
                         break 'connected;
-                    }
-                    if let Some(period_ms) = transport.post_send_delay_ms(&pkt) {
-                        Timer::after(Duration::from_millis(period_ms)).await;
                     }
                 }
             }
