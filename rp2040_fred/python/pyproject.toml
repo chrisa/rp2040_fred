@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "fred-client"
+version = "0.1.0"
+description = "Python bindings for the RP2040 FRED monitor client"
+requires-python = ">=3.12"
+
+[tool.maturin]
+manifest-path = "rust_ext/Cargo.toml"
+module-name = "_fred_native"
+python-source = "."
+features = ["extension-module"]

@@ -1,0 +1,17 @@
+[package]
+name = "fred-python-ext"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_fred_native"
+crate-type = ["cdylib"]
+
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+fredctl = { path = "../../host" }
+pyo3 = { version = "0.22.6", features = ["macros"] }
+rp2040-fred-protocol = { path = "../../protocol" }
