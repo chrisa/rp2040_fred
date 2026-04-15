@@ -1,5 +1,7 @@
 firmware/target
 host/target
 protocol/target
-python/venv
-python/__pycache__
+venv
+__pycache__
+python/fred_client/*.so
+python/rust_ext/target
