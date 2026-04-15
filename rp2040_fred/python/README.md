@@ -1,14 +1,29 @@
-# Python USB Client
+# Python Monitor Client
 
-This is a pure-Python client for the RP2040 FRED USB bridge, using `pyusb`.
+The Python client is now a compatibility wrapper over a Rust implementation
+built with `pyo3`.
 
-## Install
+## Status
+
+- Monitoring/telemetry is supported.
+- Passive capture is intentionally not exposed in Python.
+- The external import path remains `from fred_client import FredUsbClient`.
+
+## Development install
+
+Create a virtual environment and install `maturin`:
 
 ```bash
-pip install pyusb
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip maturin
 ```
 
-You also need a libusb backend installed on the host OS.
+Then build an editable local install from the `python/` directory:
+
+```bash
+maturin develop
+```
 
 ## Usage
 
@@ -21,30 +36,26 @@ client.enable_polling(period_ms=25)
 snapshot = client.refresh()
 print(snapshot)
 # {
-#   'x_mm': ...,
-#   'z_mm': ...,
-#   'spindle_rpm': ...,
-#   'x_counts': ...,
-#   'z_counts': ...,
-#   'tick': ...,
-#   'flags': ...,
+#   "x_mm": ...,
+#   "z_mm": ...,
+#   "spindle_rpm": ...,
+#   "x_counts": ...,
+#   "z_counts": ...,
+#   "tick": ...,
+#   "flags": ...,
 # }
 
 client.disable_polling()
 client.close()
 ```
 
-`enable_polling()` now sends `CAPTURE_SET=0` first, because firmware powers up in passive capture mode.
+## Unsupported capture API
 
-You can toggle capture explicitly:
+The compatibility layer keeps these methods so existing imports fail
+explicitly rather than silently changing behavior:
 
-```python
-client.enable_capture()
-samples = client.read_capture_samples(timeout_ms=50)
-print([f"0x{sample:08X}" for sample in samples])
-client.disable_capture()
-```
+- `enable_capture()`
+- `disable_capture()`
+- `read_capture_samples()`
 
-`refresh()` drains any pending telemetry packets and returns the latest snapshot.
-If trace packets arrive while you are polling or performing control transactions,
-the client keeps them buffered so `read_capture_samples()` can return them later.
+Each raises `NotImplementedError`.
