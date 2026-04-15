@@ -1,16 +1,13 @@
-mod capture_file;
-mod transport;
-
 use std::env;
 use std::fs::File;
 use std::io;
 use std::io::BufReader;
 
-use capture_file::{CaptureReader, CaptureWriter};
-use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-use rp2040_fred_protocol::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
+use fredctl::capture_file::{CaptureReader, CaptureWriter};
+use fredctl::monitor::FredMonitorClient;
+use fredctl::transport::{HostTransport, UsbTransport};
+use rp2040_fred_protocol::bridge_proto::Packet;
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
-use transport::{HostTransport, UsbTransport};
 
 fn main() -> io::Result<()> {
     let mut args = env::args().skip(1);
@@ -87,27 +84,17 @@ fn set_usb_telemetry(enable: bool) -> io::Result<()> {
 }
 
 fn monitor_usb() -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let _ = t.transact(Packet::capture_set(1, false))?;
-    let _ = t.transact(Packet::telemetry_set(2, true, 25))?;
-
-    let cal = Calibration::default();
+    let mut client = FredMonitorClient::open(0x2E8A, 0x000A)?;
+    client.enable_polling(25)?;
     println!("step  X_mm        Z_mm        RPM");
 
     let mut i = 0usize;
     loop {
-        let pkt = t.read_packet()?;
-        if pkt.msg_type != MsgType::Telemetry || pkt.payload_len < 16 {
-            continue;
-        }
-        let p = pkt.payload_used();
-        let snapshot = DroSnapshot {
-            x_counts: i32::from_le_bytes([p[4], p[5], p[6], p[7]]),
-            z_counts: i32::from_le_bytes([p[8], p[9], p[10], p[11]]),
-            rpm: u16::from_le_bytes([p[12], p[13]]),
-        };
-        let (x_mm, z_mm, rpm) = counts_to_mm(snapshot, cal);
-        println!("{:04}  {:+9.3}   {:+9.3}   {:5}", i, x_mm, z_mm, rpm);
+        let snapshot = client.next_snapshot()?;
+        println!(
+            "{:04}  {:+9.3}   {:+9.3}   {:5}",
+            i, snapshot.x_mm, snapshot.z_mm, snapshot.spindle_rpm
+        );
         i = i.wrapping_add(1);
     }
 }
@@ -288,7 +275,6 @@ fn print_decoded_snapshot(snapshot: FeedbackSnapshot) {
 fn format_axis(axis: AxisSnapshot) -> String {
     format!("{}{:06}", if axis.negative { "-" } else { "+" }, axis.value)
 }
-
 
 #[derive(Default)]
 struct TraceCaptureCounters {

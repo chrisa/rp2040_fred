@@ -97,11 +97,15 @@ impl UsbTransport {
     }
 
     pub fn read_packet(&mut self) -> io::Result<Packet> {
+        self.read_packet_timeout(self.timeout)
+    }
+
+    pub fn read_packet_timeout(&mut self, timeout: Duration) -> io::Result<Packet> {
         loop {
             let mut buf = [0u8; PACKET_SIZE];
             let n = self
                 .handle
-                .read_bulk(self.in_ep, &mut buf, self.timeout)
+                .read_bulk(self.in_ep, &mut buf, timeout)
                 .map_err(io_other)?;
 
             // Embassy's CMSIS-DAP v2 class appends a zero-length packet after
@@ -142,6 +146,10 @@ impl UsbTransport {
                 ),
             ));
         }
+    }
+
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
     }
 
     fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
