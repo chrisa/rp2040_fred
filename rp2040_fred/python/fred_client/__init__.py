@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-from _fred_native import FredProtocolError, FredUsbError
-from _fred_native import FredUsbClient as _NativeFredUsbClient
+from ._fred_native import FredProtocolError, FredUsbError
+from ._fred_native import FredUsbClient as _NativeFredUsbClient
 
 
 class FredUsbClient:

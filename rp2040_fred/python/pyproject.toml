@@ -10,6 +10,6 @@ requires-python = ">=3.12"
 
 [tool.maturin]
 manifest-path = "rust_ext/Cargo.toml"
-module-name = "_fred_native"
+module-name = "fred_client._fred_native"
 python-source = "."
 features = ["extension-module"]
