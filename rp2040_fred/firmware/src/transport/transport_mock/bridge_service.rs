@@ -2,7 +2,7 @@
 
 use super::mock_bus::MockBusRunner;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-use rp2040_fred_protocol::dro_decode::{DroAssembler, DroSnapshot};
+use rp2040_fred_protocol::trace_decode::{DroAssembler, DroSnapshot};
 
 pub const FLAG_ENABLED: u8 = 1 << 0;
 

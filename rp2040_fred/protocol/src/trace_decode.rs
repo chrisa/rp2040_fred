@@ -7,8 +7,7 @@ pub struct TraceCycle {
 
 impl TraceCycle {
     pub fn from_sample(sample: u32) -> Option<Self> {
-        // let clock_high = ((sample >> 17) & 1) != 0;
-        let clock_high = true;
+        let clock_high = ((sample >> 17) & 1) != 0;
         let fred_selected = ((sample >> 20) & 1) == 0;
 
         if !clock_high || !fred_selected {
@@ -23,6 +22,28 @@ impl TraceCycle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DroSnapshot {
+    pub x_counts: i32,
+    pub z_counts: i32,
+    pub rpm: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Calibration {
+    pub x_counts_per_mm: f32,
+    pub z_counts_per_mm: f32,
+}
+
+impl Default for Calibration {
+    fn default() -> Self {
+        Self {
+            x_counts_per_mm: 100.0,
+            z_counts_per_mm: 100.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AxisSnapshot {
     pub negative: bool,
@@ -31,7 +52,58 @@ pub struct AxisSnapshot {
 
 impl AxisSnapshot {
     pub fn count(&self) -> i32 {
-        if self.negative { self.value as i32 * -1 } else { self.value as i32 }
+        if self.negative {
+            self.value as i32 * -1
+        } else {
+            self.value as i32
+        }
+    }
+
+    pub fn digits(&self) -> AxisDigits {
+        AxisDigits::from_axis(self.negative, self.value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AxisDigits {
+    bytes: [u8; 7],
+}
+
+impl AxisDigits {
+    fn from_axis(negative: bool, value: u32) -> Self {
+        let mut bytes = [0u8; 7];
+        bytes[0] = if negative { b'-' } else { b'+' };
+
+        let mut value = value;
+        let mut idx = 6;
+        while idx > 0 {
+            bytes[idx] = b'0' + (value % 10) as u8;
+            value /= 10;
+            idx -= 1;
+        }
+
+        Self { bytes }
+    }
+}
+
+impl core::fmt::Display for AxisDigits {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let s = core::str::from_utf8(&self.bytes).map_err(|_| core::fmt::Error)?;
+        f.write_str(s)
+    }
+}
+
+impl PartialEq<&str> for AxisDigits {
+    fn eq(&self, other: &&str) -> bool {
+        core::str::from_utf8(&self.bytes)
+            .map(|s| s == *other)
+            .unwrap_or(false)
+    }
+}
+
+impl PartialEq<AxisDigits> for &str {
+    fn eq(&self, other: &AxisDigits) -> bool {
+        other == self
     }
 }
 
@@ -44,6 +116,23 @@ pub struct FeedbackSnapshot {
     pub rpm_display: u16,
 }
 
+impl FeedbackSnapshot {
+    pub fn x_digits(&self) -> AxisDigits {
+        self.x.digits()
+    }
+
+    pub fn z_digits(&self) -> AxisDigits {
+        self.z.digits()
+    }
+
+    pub fn dro_snapshot(&self) -> DroSnapshot {
+        DroSnapshot {
+            x_counts: self.x.count(),
+            z_counts: self.z.count(),
+            rpm: self.rpm_raw,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct AxisState {
@@ -79,6 +168,84 @@ impl AxisState {
                 + bcd_pair_value(self.pairs[2]),
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct DroAxisScratch {
+    sign_neg: bool,
+    b2: u8,
+    b1: u8,
+    b0: u8,
+}
+
+impl DroAxisScratch {
+    fn counts(&self) -> i32 {
+        let mag = ((self.b2 as u32) << 16) | ((self.b1 as u32) << 8) | self.b0 as u32;
+        if self.sign_neg {
+            -(mag as i32)
+        } else {
+            mag as i32
+        }
+    }
+}
+
+pub struct DroAssembler {
+    x: DroAxisScratch,
+    z: DroAxisScratch,
+    rpm_hi: u8,
+    rpm_lo: u8,
+}
+
+impl DroAssembler {
+    pub const fn new() -> Self {
+        Self {
+            x: DroAxisScratch {
+                sign_neg: false,
+                b2: 0,
+                b1: 0,
+                b0: 0,
+            },
+            z: DroAxisScratch {
+                sign_neg: false,
+                b2: 0,
+                b1: 0,
+                b0: 0,
+            },
+            rpm_hi: 0,
+            rpm_lo: 0,
+        }
+    }
+
+    pub fn on_fc80_fcf1(&mut self, cmd: u8, response: u8) {
+        match cmd {
+            0x03 => self.x.sign_neg = response != 0,
+            0x02 => self.x.b2 = response,
+            0x01 => self.x.b1 = response,
+            0x00 => self.x.b0 = response,
+            0x07 => self.z.sign_neg = response != 0,
+            0x06 => self.z.b2 = response,
+            0x05 => self.z.b1 = response,
+            0x04 => self.z.b0 = response,
+            0x0D => self.rpm_hi = response,
+            0x0C => self.rpm_lo = response,
+            _ => {}
+        }
+    }
+
+    pub fn snapshot(&self) -> DroSnapshot {
+        DroSnapshot {
+            x_counts: self.x.counts(),
+            z_counts: self.z.counts(),
+            rpm: ((self.rpm_hi as u16) << 8) | self.rpm_lo as u16,
+        }
+    }
+}
+
+pub fn counts_to_mm(snapshot: DroSnapshot, cal: Calibration) -> (f32, f32, u16) {
+    // CNCMAN uses diameter semantics for X (x*2), direct for Z.
+    let x_mm = ((snapshot.x_counts as f32) * 2.0) / cal.x_counts_per_mm;
+    let z_mm = (snapshot.z_counts as f32) / cal.z_counts_per_mm;
+    (x_mm, z_mm, snapshot.rpm)
 }
 
 pub struct FeedbackDecoder {
@@ -202,7 +369,7 @@ fn bcd_pair_value(byte: u8) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FeedbackDecoder, TraceCycle};
+    use super::{counts_to_mm, Calibration, DroAssembler, FeedbackDecoder, TraceCycle};
 
     fn sample(data: u8, addr: u8, read: bool, clock_high: bool) -> u32 {
         (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | ((clock_high as u32) << 17)
@@ -248,5 +415,38 @@ mod tests {
         assert_eq!(snapshot.rpm_display, 780);
         assert_eq!(snapshot.x_digits(), "-000652");
         assert_eq!(snapshot.z_digits(), "+001234");
+    }
+
+    #[test]
+    fn assembler_rebuilds_values_and_converts_to_mm() {
+        let mut a = DroAssembler::new();
+        a.on_fc80_fcf1(0x03, 0x01);
+        a.on_fc80_fcf1(0x02, 0x00);
+        a.on_fc80_fcf1(0x01, 0x00);
+        a.on_fc80_fcf1(0x00, 0x64);
+
+        a.on_fc80_fcf1(0x07, 0x00);
+        a.on_fc80_fcf1(0x06, 0x00);
+        a.on_fc80_fcf1(0x05, 0x00);
+        a.on_fc80_fcf1(0x04, 0xC8);
+
+        a.on_fc80_fcf1(0x0D, 0x07);
+        a.on_fc80_fcf1(0x0C, 0xD0);
+
+        let s = a.snapshot();
+        assert_eq!(s.x_counts, -100);
+        assert_eq!(s.z_counts, 200);
+        assert_eq!(s.rpm, 2000);
+
+        let (x_mm, z_mm, rpm) = counts_to_mm(
+            s,
+            Calibration {
+                x_counts_per_mm: 100.0,
+                z_counts_per_mm: 100.0,
+            },
+        );
+        assert!((x_mm + 2.0).abs() < 0.0001);
+        assert!((z_mm - 2.0).abs() < 0.0001);
+        assert_eq!(rpm, 2000);
     }
 }

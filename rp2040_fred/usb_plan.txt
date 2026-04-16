@@ -131,7 +131,7 @@ Workspace addition:
   - `src/main.rs`
   - `src/usb_transport.rs`
   - `src/bridge_proto.rs`
-  - `src/dro_decode.rs`
+  - `src/trace_decode.rs`
   - `src/ui.rs` (simple TUI/terminal output)
 
 CLI commands:

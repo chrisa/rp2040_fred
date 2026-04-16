@@ -12,7 +12,7 @@ Status
 Current Behavior
 - `../protocol/src/bridge_proto.rs` defines host<->RP2040 packet framing and CRC32 checks.
 - `../protocol/src/bridge_service.rs` handles DRO requests (`PING`, `TELEMETRY_SET`, `SNAPSHOT_REQ`) and emits telemetry events (mock path).
-- `../protocol/src/dro_decode.rs` reconstructs X/Z/RPM from FC80/FCF1 command-response stream.
+- `../protocol/src/trace_decode.rs` reconstructs X/Z/RPM from FC80/FCF1 command-response stream and also holds the shared DRO calibration helpers.
 - `../protocol/src/protocol.rs` implements `FC80 -> (FCF0, FCF1)` logic for the DRO command cadence.
 - `src/main.rs` runs USB packet IO and delegates transport behavior.
 - `src/transport_mock.rs` handles mock bridge requests/events.

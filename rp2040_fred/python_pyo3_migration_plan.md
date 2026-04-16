@@ -15,7 +15,7 @@ Scope boundary:
 Python currently duplicates Rust logic in two critical areas:
 
 - USB discovery, interface claiming, bulk read/write, timeout handling, and request/ACK matching in [python/fred_client.py](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/python/fred_client.py) and [host/src/transport.rs](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/host/src/transport.rs).
-- Bridge packet framing and telemetry decoding in [python/fred_client.py](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/python/fred_client.py), [protocol/src/bridge_proto.rs](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/protocol/src/bridge_proto.rs), and [protocol/src/dro_decode.rs](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/protocol/src/dro_decode.rs).
+- Bridge packet framing and telemetry decoding in [python/fred_client.py](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/python/fred_client.py), [protocol/src/bridge_proto.rs](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/protocol/src/bridge_proto.rs), and [protocol/src/trace_decode.rs](/home/chris/Projects/tcl125/tcl202_dis/rp2040_fred/protocol/src/trace_decode.rs).
 
 That duplication is the right thing to remove first. Python trace/capture support can be dropped rather than ported.
 

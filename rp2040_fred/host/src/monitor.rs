@@ -2,7 +2,7 @@ use std::io;
 use std::time::Duration;
 
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-use rp2040_fred_protocol::dro_decode::{counts_to_mm, Calibration, DroSnapshot};
+use rp2040_fred_protocol::trace_decode::{counts_to_mm, Calibration, DroSnapshot};
 
 use crate::transport::{HostTransport, UsbTransport};
 
@@ -146,7 +146,7 @@ impl FredMonitorClient {
 mod tests {
     use super::MonitorSnapshot;
     use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-    use rp2040_fred_protocol::dro_decode::Calibration;
+    use rp2040_fred_protocol::trace_decode::Calibration;
 
     #[test]
     fn telemetry_packet_decodes_to_monitor_snapshot() {
