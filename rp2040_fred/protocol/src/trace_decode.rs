@@ -53,7 +53,7 @@ pub struct AxisSnapshot {
 impl AxisSnapshot {
     pub fn count(&self) -> i32 {
         if self.negative {
-            self.value as i32 * -1
+            -(self.value as i32)
         } else {
             self.value as i32
         }
@@ -170,77 +170,6 @@ impl AxisState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct DroAxisScratch {
-    sign_neg: bool,
-    b2: u8,
-    b1: u8,
-    b0: u8,
-}
-
-impl DroAxisScratch {
-    fn counts(&self) -> i32 {
-        let mag = ((self.b2 as u32) << 16) | ((self.b1 as u32) << 8) | self.b0 as u32;
-        if self.sign_neg {
-            -(mag as i32)
-        } else {
-            mag as i32
-        }
-    }
-}
-
-pub struct DroAssembler {
-    x: DroAxisScratch,
-    z: DroAxisScratch,
-    rpm_hi: u8,
-    rpm_lo: u8,
-}
-
-impl DroAssembler {
-    pub const fn new() -> Self {
-        Self {
-            x: DroAxisScratch {
-                sign_neg: false,
-                b2: 0,
-                b1: 0,
-                b0: 0,
-            },
-            z: DroAxisScratch {
-                sign_neg: false,
-                b2: 0,
-                b1: 0,
-                b0: 0,
-            },
-            rpm_hi: 0,
-            rpm_lo: 0,
-        }
-    }
-
-    pub fn on_fc80_fcf1(&mut self, cmd: u8, response: u8) {
-        match cmd {
-            0x03 => self.x.sign_neg = response != 0,
-            0x02 => self.x.b2 = response,
-            0x01 => self.x.b1 = response,
-            0x00 => self.x.b0 = response,
-            0x07 => self.z.sign_neg = response != 0,
-            0x06 => self.z.b2 = response,
-            0x05 => self.z.b1 = response,
-            0x04 => self.z.b0 = response,
-            0x0D => self.rpm_hi = response,
-            0x0C => self.rpm_lo = response,
-            _ => {}
-        }
-    }
-
-    pub fn snapshot(&self) -> DroSnapshot {
-        DroSnapshot {
-            x_counts: self.x.counts(),
-            z_counts: self.z.counts(),
-            rpm: ((self.rpm_hi as u16) << 8) | self.rpm_lo as u16,
-        }
-    }
-}
-
 pub fn counts_to_mm(snapshot: DroSnapshot, cal: Calibration) -> (f32, f32, u16) {
     // CNCMAN uses diameter semantics for X (x*2), direct for Z.
     let x_mm = ((snapshot.x_counts as f32) * 2.0) / cal.x_counts_per_mm;
@@ -255,6 +184,12 @@ pub struct FeedbackDecoder {
     rpm_pairs: [u8; 2],
     rpm_mask: u8,
     last_emitted: Option<FeedbackSnapshot>,
+}
+
+impl Default for FeedbackDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FeedbackDecoder {
@@ -280,8 +215,10 @@ impl FeedbackDecoder {
     }
 
     pub fn ingest_sample(&mut self, sample_index: u64, sample: u32) -> Option<FeedbackSnapshot> {
-        let cycle = TraceCycle::from_sample(sample)?;
-        self.ingest_cycle(sample_index, cycle)
+        if let Some(cycle) = TraceCycle::from_sample(sample) {
+            return self.ingest_cycle(sample_index, cycle);
+        }
+        None
     }
 
     pub fn ingest_cycle(
@@ -305,12 +242,15 @@ impl FeedbackDecoder {
             return None;
         }
 
-        let snapshot = self.snapshot(sample_index)?;
-        if self.last_emitted == Some(snapshot) {
-            return None;
+        if let Some(snapshot) = self.snapshot(sample_index) {
+            if self.last_emitted == Some(snapshot) {
+                return None;
+            }
+            self.last_emitted = Some(snapshot);
+            return Some(snapshot)
         }
-        self.last_emitted = Some(snapshot);
-        Some(snapshot)
+
+        None
     }
 
     fn apply_response(&mut self, cmd: u8, response: u8) {
@@ -369,7 +309,7 @@ fn bcd_pair_value(byte: u8) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{counts_to_mm, Calibration, DroAssembler, FeedbackDecoder, TraceCycle};
+    use super::{counts_to_mm, Calibration, DroSnapshot, FeedbackDecoder, TraceCycle};
 
     fn sample(data: u8, addr: u8, read: bool, clock_high: bool) -> u32 {
         (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | ((clock_high as u32) << 17)
@@ -418,26 +358,12 @@ mod tests {
     }
 
     #[test]
-    fn assembler_rebuilds_values_and_converts_to_mm() {
-        let mut a = DroAssembler::new();
-        a.on_fc80_fcf1(0x03, 0x01);
-        a.on_fc80_fcf1(0x02, 0x00);
-        a.on_fc80_fcf1(0x01, 0x00);
-        a.on_fc80_fcf1(0x00, 0x64);
-
-        a.on_fc80_fcf1(0x07, 0x00);
-        a.on_fc80_fcf1(0x06, 0x00);
-        a.on_fc80_fcf1(0x05, 0x00);
-        a.on_fc80_fcf1(0x04, 0xC8);
-
-        a.on_fc80_fcf1(0x0D, 0x07);
-        a.on_fc80_fcf1(0x0C, 0xD0);
-
-        let s = a.snapshot();
-        assert_eq!(s.x_counts, -100);
-        assert_eq!(s.z_counts, 200);
-        assert_eq!(s.rpm, 2000);
-
+    fn counts_convert_to_mm() {
+        let s = DroSnapshot {
+            x_counts: -100,
+            z_counts: 200,
+            rpm: 2000,
+        };
         let (x_mm, z_mm, rpm) = counts_to_mm(
             s,
             Calibration {

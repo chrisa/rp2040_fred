@@ -9,8 +9,8 @@ pub struct MockBusFrame {
     pub response_fcf1: u8,
 }
 
-const WRITE: u8 = 1;
-const READ: u8 = 0;
+const WRITE: u8 = 0;
+const READ: u8 = 1;
 const CLOCK_H: u8 = 1 << 1;
 
 impl MockBusFrame {
@@ -99,7 +99,11 @@ mod tests {
         assert_eq!(hi.cmd_fc80, 0x0D);
         assert_eq!(lo.cmd_fc80, 0x0C);
 
-        let rpm = ((hi.response_fcf1 as u16) << 8) | lo.response_fcf1 as u16;
+        let rpm = bcd_pair_value(hi.response_fcf1) * 100 + bcd_pair_value(lo.response_fcf1);
         assert!((800..=2200).contains(&rpm));
+    }
+
+    fn bcd_pair_value(pair: u8) -> u16 {
+        ((pair >> 4) as u16) * 10 + (pair & 0x0F) as u16
     }
 }

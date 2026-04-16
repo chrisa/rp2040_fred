@@ -1,5 +1,3 @@
-#![allow(unexpected_cfgs)]
-
 use std::io;
 use std::time::Duration;
 
@@ -7,7 +5,7 @@ use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule};
+use pyo3::types::{PyAny, PyDict};
 use rp2040_fred_protocol::trace_decode::Calibration;
 
 create_exception!(_fred_native, FredProtocolError, PyRuntimeError);
@@ -59,7 +57,7 @@ impl FredUsbClient {
 
     fn close(&mut self, py: Python<'_>) {
         if let Some(client) = self.inner.take() {
-            py.allow_threads(move || client.close());
+            py.detach(move || client.close());
         }
     }
 
@@ -90,7 +88,7 @@ impl FredUsbClient {
             .inner
             .as_mut()
             .ok_or_else(|| FredUsbError::new_err("device not open"))?;
-        py.allow_threads(|| f(client)).map_err(map_io_error)
+        py.detach(|| f(client)).map_err(map_io_error)
     }
 }
 
@@ -98,7 +96,7 @@ fn snapshot_to_dict<'py>(
     py: Python<'py>,
     snapshot: MonitorSnapshot,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
     dict.set_item("x_mm", snapshot.x_mm)?;
     dict.set_item("z_mm", snapshot.z_mm)?;
     dict.set_item("spindle_rpm", snapshot.spindle_rpm)?;
@@ -118,12 +116,13 @@ fn map_io_error(err: io::Error) -> PyErr {
 }
 
 #[pymodule]
-fn _fred_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<FredUsbClient>()?;
-    m.add(
-        "FredProtocolError",
-        py.get_type_bound::<FredProtocolError>(),
-    )?;
-    m.add("FredUsbError", py.get_type_bound::<FredUsbError>())?;
-    Ok(())
+mod _fred_native {
+    #[pymodule_export]
+    use super::FredUsbError;
+
+    #[pymodule_export]
+    use super::FredProtocolError;
+
+    #[pymodule_export]
+    use super::FredUsbClient;
 }

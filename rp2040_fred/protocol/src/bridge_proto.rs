@@ -263,7 +263,7 @@ impl Packet {
         let dropped_samples_total = u32::from_le_bytes([used[0], used[1], used[2], used[3]]);
         let rx_stall_count_total = u32::from_le_bytes([used[4], used[5], used[6], used[7]]);
         let sample_bytes = &used[TRACE_METADATA_SIZE..];
-        if sample_bytes.len() % TRACE_PACKED_SAMPLE_SIZE != 0 {
+        if !sample_bytes.len().is_multiple_of(TRACE_PACKED_SAMPLE_SIZE) {
             return None;
         }
 

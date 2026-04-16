@@ -7,12 +7,12 @@ use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::FredMonitorClient;
 use fredctl::transport::{HostTransport, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::Packet;
-use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
+use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot, TraceCycle};
 
 fn main() -> io::Result<()> {
     let mut args = env::args().skip(1);
     let cmd = args.next().unwrap_or_else(|| "help".to_string());
-    let mode = args.next().unwrap_or_else(|| "".to_string());
+    let mode = args.next().unwrap_or_default();
 
     match (cmd.as_str(), mode.as_str()) {
         ("monitor-on", "usb") => set_usb_telemetry(true),
@@ -152,6 +152,7 @@ fn decode_usb_capture() -> io::Result<()> {
     loop {
         let pkt = t.read_packet()?;
         let Some(trace) = pkt.decode_trace_samples() else {
+            println!("no decoder samples");
             continue;
         };
 
@@ -162,9 +163,11 @@ fn decode_usb_capture() -> io::Result<()> {
         }
 
         for sample in trace.iter_samples() {
-            if let Some(snapshot) = decoder.ingest_sample(sample_index, sample) {
+            let cycle = TraceCycle::from_sample(sample).unwrap();
+
+            if let Some(snapshot) = decoder.ingest_cycle(sample_index, cycle) {
                 print_decoded_snapshot(snapshot);
-            }
+            };
             sample_index = sample_index.wrapping_add(1);
         }
     }

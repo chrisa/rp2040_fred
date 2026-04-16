@@ -13,5 +13,5 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 fredctl = { path = "../../host" }
-pyo3 = { version = "0.22.6", features = ["macros"] }
+pyo3 = { version = "0.28.3", features = ["macros"] }
 rp2040-fred-protocol = { path = "../../protocol" }

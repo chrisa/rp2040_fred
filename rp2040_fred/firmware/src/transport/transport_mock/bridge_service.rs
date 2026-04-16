@@ -2,7 +2,7 @@
 
 use super::mock_bus::MockBusRunner;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-use rp2040_fred_protocol::trace_decode::{DroAssembler, DroSnapshot};
+use rp2040_fred_protocol::trace_decode::{DroSnapshot, FeedbackDecoder, TraceCycle};
 
 pub const FLAG_ENABLED: u8 = 1 << 0;
 
@@ -16,7 +16,9 @@ pub struct BridgeService {
     tx_timeout_count: u32,
     rx_timeout_count: u32,
     mock: MockBusRunner,
-    dro: DroAssembler,
+    decoder: FeedbackDecoder,
+    sample_index: u64,
+    snapshot: DroSnapshot,
 }
 
 impl BridgeService {
@@ -31,7 +33,13 @@ impl BridgeService {
             tx_timeout_count: 0,
             rx_timeout_count: 0,
             mock: MockBusRunner::new(),
-            dro: DroAssembler::new(),
+            decoder: FeedbackDecoder::new(),
+            sample_index: 0,
+            snapshot: DroSnapshot {
+                x_counts: 0,
+                z_counts: 0,
+                rpm: 0,
+            },
         }
     }
 
@@ -103,7 +111,26 @@ impl BridgeService {
         let frame = self.mock.step();
         self.tick = self.tick.wrapping_add(1);
         self.bus_cycles = self.bus_cycles.wrapping_add(1);
-        self.dro.on_fc80_fcf1(frame.cmd_fc80, frame.response_fcf1);
+        let _ = self.decoder.ingest_cycle(
+            self.sample_index,
+            TraceCycle {
+                data: frame.cmd_fc80,
+                addr: 0x80,
+                read: false,
+            },
+        );
+        self.sample_index = self.sample_index.wrapping_add(1);
+        if let Some(decoded) = self.decoder.ingest_cycle(
+            self.sample_index,
+            TraceCycle {
+                data: frame.response_fcf1,
+                addr: 0xF1,
+                read: true,
+            },
+        ) {
+            self.snapshot = decoded.dro_snapshot();
+        }
+        self.sample_index = self.sample_index.wrapping_add(1);
 
         // Emit one telemetry packet per full DRO command cadence.
         if self.capture_enabled {
@@ -149,7 +176,7 @@ impl BridgeService {
     }
 
     pub fn snapshot(&self) -> DroSnapshot {
-        self.dro.snapshot()
+        self.snapshot
     }
 
     fn flags(&self) -> u8 {
@@ -188,7 +215,7 @@ mod tests {
 
         let mut seen = 0usize;
         for _ in 0..40 {
-            if svc.poll_telemetry_event().is_some() {
+            if svc.poll_outgoing_packet().is_some() {
                 seen += 1;
             }
         }

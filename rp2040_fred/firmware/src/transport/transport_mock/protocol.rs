@@ -55,21 +55,21 @@ impl DroProtocolEngine {
         let status = 0x00;
 
         let response = match cmd_fc80 {
-            // X sign + 6 hex digits across 02/01/00
+            // X sign + 6 decimal digits split into packed BCD pairs at 02/01/00.
             0x03 => sign_byte(self.telemetry.x_counts),
-            0x02 => byte2(abs24(self.telemetry.x_counts)),
-            0x01 => byte1(abs24(self.telemetry.x_counts)),
-            0x00 => byte0(abs24(self.telemetry.x_counts)),
+            0x02 => axis_pair(self.telemetry.x_counts, 0),
+            0x01 => axis_pair(self.telemetry.x_counts, 1),
+            0x00 => axis_pair(self.telemetry.x_counts, 2),
 
-            // Z sign + 6 hex digits across 06/05/04
+            // Z sign + 6 decimal digits split into packed BCD pairs at 06/05/04.
             0x07 => sign_byte(self.telemetry.z_counts),
-            0x06 => byte2(abs24(self.telemetry.z_counts)),
-            0x05 => byte1(abs24(self.telemetry.z_counts)),
-            0x04 => byte0(abs24(self.telemetry.z_counts)),
+            0x06 => axis_pair(self.telemetry.z_counts, 0),
+            0x05 => axis_pair(self.telemetry.z_counts, 1),
+            0x04 => axis_pair(self.telemetry.z_counts, 2),
 
-            // Speed digits (ROM callback forces the very last digit to zero on 0x0C path).
-            0x0D => (self.telemetry.rpm >> 8) as u8,
-            0x0C => (self.telemetry.rpm & 0x00FF) as u8,
+            // RPM as two packed BCD pairs.
+            0x0D => rpm_pair(self.telemetry.rpm, 0),
+            0x0C => rpm_pair(self.telemetry.rpm, 1),
 
             _ => 0x00,
         };
@@ -81,11 +81,6 @@ impl DroProtocolEngine {
     }
 }
 
-const fn abs24(v: i32) -> u32 {
-    let mag = if v < 0 { (-v) as u32 } else { v as u32 };
-    mag & 0x00FF_FFFF
-}
-
 const fn sign_byte(v: i32) -> u8 {
     if v < 0 {
         0x01
@@ -94,14 +89,25 @@ const fn sign_byte(v: i32) -> u8 {
     }
 }
 
-const fn byte2(v: u32) -> u8 {
-    ((v >> 16) & 0xFF) as u8
+fn axis_pair(counts: i32, pair_index: usize) -> u8 {
+    let mag = counts.unsigned_abs().min(999_999);
+    let pair_value = match pair_index {
+        0 => mag / 10_000,
+        1 => (mag / 100) % 100,
+        _ => mag % 100,
+    };
+    pack_bcd(pair_value as u8)
 }
 
-const fn byte1(v: u32) -> u8 {
-    ((v >> 8) & 0xFF) as u8
+fn rpm_pair(rpm: u16, pair_index: usize) -> u8 {
+    let rpm = rpm.min(9_999);
+    let pair_value = match pair_index {
+        0 => rpm / 100,
+        _ => rpm % 100,
+    };
+    pack_bcd(pair_value as u8)
 }
 
-const fn byte0(v: u32) -> u8 {
-    (v & 0xFF) as u8
+const fn pack_bcd(two_digits: u8) -> u8 {
+    ((two_digits / 10) << 4) | (two_digits % 10)
 }
