@@ -1,7 +1,9 @@
+#[cfg(feature = "pio-master")]
+pub mod transport_master;
 #[cfg(feature = "mock-bus")]
 pub mod transport_mock;
-#[cfg(feature = "pio-real")]
-pub mod transport_pio;
+#[cfg(feature = "pio-passive")]
+pub mod transport_passive;
 
 use rp2040_fred_protocol::bridge_proto::Packet;
 

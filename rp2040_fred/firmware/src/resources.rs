@@ -8,8 +8,9 @@ assign_resources! {
     usb: UsbResources {
         usb: USB,
     }
-    sniffer: SnifferResources {
+    pio: PioResources {
         pio0: PIO0,
+        pio1: PIO1,
         pin_0: PIN_0,
         pin_1: PIN_1,
         pin_2: PIN_2,
@@ -28,6 +29,8 @@ assign_resources! {
         pin_15: PIN_15,
         pin_16: PIN_16,
         pin_17: PIN_17,
+        pin_18: PIN_18,
+        pin_19: PIN_19,
         pin_20: PIN_20,
         pin_26: PIN_26,
         pin_27: PIN_27,

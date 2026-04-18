@@ -24,10 +24,10 @@ Shared Data Bus (bidirectional via transceiver)
 - `D7 <-> GPIO7`
 
 Control Outputs
-- `1MHZE   -> GPIO17`
 - `RnW     -> GPIO16`
+- `1MHZE   -> GPIO17`
 - `FRED_N  -> GPIO20`
-- `DATA_OE_N -> GPIO28`
+- `ADDR_DIR -> GPIO26`
 - `DATA_DIR  -> GPIO27`
 
 PIO Allocation
@@ -42,4 +42,6 @@ Clocking
 Notes
 - This map intentionally places `D0..D7` on GPIO0..7 and `A0..A7` on GPIO8..15,
   so PIO can emit both with one `out pins, 16` operation.
-- Shared data bus direction is controlled by `DATA_DIR` and `DATA_OE_N`.
+- Shared data bus direction is controlled by `DATA_DIR` and `ADDR_DIR`.
+- Pins RnW, 1MHZE, FRED_N, ADDR_DIR and DATA_DIR are not consecutive GPIO numbers
+  - this can compromise PIO designs especially with side-set or IN/OUT

@@ -22,7 +22,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use crate::resources::{
-    AssignedResources, Core1Resources, MainResources, SnifferResources, UsbResources,
+    AssignedResources, Core1Resources, MainResources, PioResources, UsbResources,
 };
 use crate::transport::Transport;
 
@@ -58,10 +58,17 @@ async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let r = split_resources!(p);
 
-    #[cfg(feature = "mock-bus")]
-    let mut transport = transport::transport_mock::MockTransport::new();
-    #[cfg(feature = "pio-real")]
-    let mut transport = transport::transport_pio::PioTransport::new(r.core1, r.sniffer);
+    let mut transport = cfg_select! {
+         feature = "mock-bus" => {
+            transport::transport_mock::MockTransport::new()
+         },
+         feature = "pio-passive" => {
+            transport::transport_passive::PioTransport::new(r.core1, r.pio)
+         },
+         feature = "pio-master" => {
+            transport::transport_master::PioTransport::new(r.core1, r.pio)
+         }
+    };
 
     let mut led = Output::new(r.main.led, Level::Low);
     led.set_high();

@@ -13,7 +13,7 @@ use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
-use crate::resources::{Core1Resources, SnifferResources};
+use crate::resources::{Core1Resources, PioResources};
 use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
@@ -53,7 +53,7 @@ pub struct PioTransport {
 }
 
 impl PioTransport {
-    pub fn new(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> Self {
+    pub fn new(core1_resources: Core1Resources, pio_resources: PioResources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
 
@@ -64,7 +64,7 @@ impl PioTransport {
         spawn_core1(
             core1_resources.core1,
             unsafe { &mut *addr_of_mut!(CORE1_STACK) },
-            move || capture_core1_loop(sniffer_resources, producer),
+            move || capture_core1_loop(pio_resources, producer),
         );
 
         Self {
@@ -258,45 +258,42 @@ impl Transport for PioTransport {
     }
 }
 
-fn capture_core1_loop(
-    sniffer_resources: SnifferResources,
-    mut trace_samples: Producer<'static, u32>,
-) -> ! {
-    let mut data_dir_a = Output::new(sniffer_resources.pin_26, Level::Low);
-    let mut data_dir_d = Output::new(sniffer_resources.pin_27, Level::Low);
+fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'static, u32>) -> ! {
+    let mut data_dir_a = Output::new(pio_resources.pin_26, Level::Low);
+    let mut data_dir_d = Output::new(pio_resources.pin_27, Level::Low);
     data_dir_a.set_low();
     data_dir_d.set_low();
 
     let program = pio::pio_file!(
-        "../pio/passive_sniffer.pio",
-        select_program("fred_passive_sniffer"),
+        "../pio/passive_pio.pio",
+        select_program("fred_passive_pio"),
         options(max_program_size = 32)
     );
 
-    let mut pio = Pio::new(sniffer_resources.pio0, PioIrqs);
+    let mut pio = Pio::new(pio_resources.pio0, PioIrqs);
 
     let loaded = pio.common.load_program(&program.program);
 
-    let p0 = pio.common.make_pio_pin(sniffer_resources.pin_0);
-    let p1 = pio.common.make_pio_pin(sniffer_resources.pin_1);
-    let p2 = pio.common.make_pio_pin(sniffer_resources.pin_2);
-    let p3 = pio.common.make_pio_pin(sniffer_resources.pin_3);
-    let p4 = pio.common.make_pio_pin(sniffer_resources.pin_4);
-    let p5 = pio.common.make_pio_pin(sniffer_resources.pin_5);
-    let p6 = pio.common.make_pio_pin(sniffer_resources.pin_6);
-    let p7 = pio.common.make_pio_pin(sniffer_resources.pin_7);
-    let p8 = pio.common.make_pio_pin(sniffer_resources.pin_8);
-    let p9 = pio.common.make_pio_pin(sniffer_resources.pin_9);
-    let p10 = pio.common.make_pio_pin(sniffer_resources.pin_10);
-    let p11 = pio.common.make_pio_pin(sniffer_resources.pin_11);
-    let p12 = pio.common.make_pio_pin(sniffer_resources.pin_12);
-    let p13 = pio.common.make_pio_pin(sniffer_resources.pin_13);
-    let p14 = pio.common.make_pio_pin(sniffer_resources.pin_14);
-    let p15 = pio.common.make_pio_pin(sniffer_resources.pin_15);
-    let p16 = pio.common.make_pio_pin(sniffer_resources.pin_16);
-    let p17 = pio.common.make_pio_pin(sniffer_resources.pin_17);
-    let p20 = pio.common.make_pio_pin(sniffer_resources.pin_20);
-    let p28 = pio.common.make_pio_pin(sniffer_resources.pin_28);
+    let p0 = pio.common.make_pio_pin(pio_resources.pin_0);
+    let p1 = pio.common.make_pio_pin(pio_resources.pin_1);
+    let p2 = pio.common.make_pio_pin(pio_resources.pin_2);
+    let p3 = pio.common.make_pio_pin(pio_resources.pin_3);
+    let p4 = pio.common.make_pio_pin(pio_resources.pin_4);
+    let p5 = pio.common.make_pio_pin(pio_resources.pin_5);
+    let p6 = pio.common.make_pio_pin(pio_resources.pin_6);
+    let p7 = pio.common.make_pio_pin(pio_resources.pin_7);
+    let p8 = pio.common.make_pio_pin(pio_resources.pin_8);
+    let p9 = pio.common.make_pio_pin(pio_resources.pin_9);
+    let p10 = pio.common.make_pio_pin(pio_resources.pin_10);
+    let p11 = pio.common.make_pio_pin(pio_resources.pin_11);
+    let p12 = pio.common.make_pio_pin(pio_resources.pin_12);
+    let p13 = pio.common.make_pio_pin(pio_resources.pin_13);
+    let p14 = pio.common.make_pio_pin(pio_resources.pin_14);
+    let p15 = pio.common.make_pio_pin(pio_resources.pin_15);
+    let p16 = pio.common.make_pio_pin(pio_resources.pin_16);
+    let p17 = pio.common.make_pio_pin(pio_resources.pin_17);
+    let p20 = pio.common.make_pio_pin(pio_resources.pin_20);
+    let p28 = pio.common.make_pio_pin(pio_resources.pin_28);
 
     let in_pins = [
         &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, // data bus

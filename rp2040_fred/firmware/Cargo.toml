@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["defmt-log","pio-real"]
+default = ["defmt-log","pio-master"]
 mock-bus = []
-pio-real = []
+pio-passive = []
+pio-master = []
 defmt-log = [
   "dep:defmt",
   "dep:defmt-rtt",

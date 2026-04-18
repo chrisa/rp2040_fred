@@ -1,0 +1,143 @@
+
+;   bits [7:0]   -> D0..D7
+;   bits [15:8]  -> A0..A7
+;   bit 16       -> RnW
+;   bit 17       -> 1MHZE
+;   bit 18       -> unused
+;   bit 19       -> unused
+;   bit 20       -> FRED_N
+
+; 1MHz clock output, 20MHz PIO system clock
+
+; IRQs
+; 0 - trigger data write
+; 1 - trigger data read
+; 2 - unused
+; 3 - clock timer
+
+
+.program fred_bm_clock
+.wrap_target
+
+; establish clock period - control will wait for this irq twice per cycle
+set x, 10
+
+delay_loop:
+
+; loop unless ready
+jmp x-- delay_loop
+
+; send the irq
+irq set 3
+
+.wrap
+
+
+; out pins 8-15
+; side_set 16, 17, 18, 19, 20
+.program fred_bm_control
+.side_set 5
+.wrap_target
+
+start:
+
+; ensure X is 0
+mov x, null           side 0b10111
+
+; fetch a word from the fifo, or 0x00000000 (from X)
+pull noblock          side 0b10111
+
+; wait for clock timer
+wait 1 irq 3          side 0b10111
+
+; if 0, do a read cycle
+jmp !y read_cycle     side 0b10111
+
+; otherwise, do a write cycle
+write_cycle:
+
+; put address on the bus, set RnW low and assert FRED low
+out pins, 8            side 0b00110
+
+; clock goes high, wait
+nop                   side 0b01110
+
+; then put data on the bus
+irq set 0             side 0b01110
+
+; wait for clock timer again
+wait 1 irq 3          side 0b01110
+
+; clock goes low
+nop                   side 0b00110
+
+; then remove FRED and RnW
+nop                   side 0b10111
+
+jmp start             side 0b10111
+
+read_cycle:
+
+; put address on the bus and assert FRED low
+out pins, 8           side 0b10110
+
+; clock goes high, wait
+nop                   side 0b11110
+
+; then read data from the bus
+irq set 1             side 0b11110
+
+; wait for clock timer again
+wait 1 irq 3          side 0b11110
+
+; clock goes low
+nop                   side 0b10110
+
+; then remove FRED and RnW
+nop                   side 0b10111
+
+.wrap
+
+
+; side_set 27
+; out_pins 0-7
+.program fred_bm_data_write
+.side_set 1
+.wrap_target
+
+; wait for interrupt from control
+wait 1 irq 0          side 0
+
+; read from fifo - expecting three bytes: 0xff for pindirs, then data, then 0x00 for pindirs
+pull block            side 0
+
+; set data bus to write and assert direction pin
+out pindirs, 8        side 1
+
+; write data
+out pins, 8 [10]      side 1; delay to keep data on bus
+
+; deassert direction pin and switch bus back to read
+out pindirs, 8        side 0
+
+.wrap
+
+
+
+; in_pins 0-7
+.program fred_bm_data_read
+.side_set 1 opt
+.wrap_target
+
+; wait for interrupt from control
+wait 1 irq 1
+
+; read data
+in pins, 8
+
+; push data
+push block
+
+.wrap
+
+
