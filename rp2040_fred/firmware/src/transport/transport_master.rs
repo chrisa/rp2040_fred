@@ -379,9 +379,9 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
 
     // setting up control pins for open-drain output
     clock_sm.set_pins(Level::Low, &control_pins);
-    clock_sm.set_pin_dirs(Direction::In, &control_pins);
+    clock_sm.set_pin_dirs(Direction::Out, &control_pins);
     clock_sm.set_pins(Level::Low, &clock_pin);
-    clock_sm.set_pin_dirs(Direction::In, &clock_pin);
+    clock_sm.set_pin_dirs(Direction::Out, &clock_pin);
 
     clock_sm.clear_fifos();
     control_sm.clear_fifos();
@@ -390,7 +390,7 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
 
     let mut clock_cfg = Config::default();
     clock_cfg.use_program(&clock_program, &clock_pin);
-    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 500_000);
+    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 2_000_000);
     clock_sm.set_config(&clock_cfg);
 
     let mut control_cfg = Config::default();
@@ -407,7 +407,7 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let mut write_cfg = Config::default();
     write_cfg.use_program(&write_program, &data_dir_pin);
     write_cfg.set_out_pins(&data_bus_pins);
-    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 10_000_000);
+    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
     write_cfg.shift_out = ShiftConfig {
         threshold: 32,
         direction: ShiftDirection::Left,
