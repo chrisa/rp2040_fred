@@ -390,7 +390,7 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
 
     let mut clock_cfg = Config::default();
     clock_cfg.use_program(&clock_program, &clock_pin);
-    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000);
+    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 500_000);
     clock_sm.set_config(&clock_cfg);
 
     let mut control_cfg = Config::default();
@@ -407,7 +407,12 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let mut write_cfg = Config::default();
     write_cfg.use_program(&write_program, &data_dir_pin);
     write_cfg.set_out_pins(&data_bus_pins);
-    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
+    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 10_000_000);
+    write_cfg.shift_out = ShiftConfig {
+        threshold: 32,
+        direction: ShiftDirection::Left,
+        auto_fill: false,
+    };
     write_sm.set_config(&write_cfg);
 
     let mut read_cfg = Config::default();
@@ -449,9 +454,11 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
         // 3. Poll `F0` again until bit 0 clears.
         // 4. Read one response byte from `F1`.
 
-        control_sm.tx().push(0xFF00_0000u32);
+        write_sm.tx().push(0xFFFF_0000u32);   // write payload FF <data> 00 00
+        control_sm.tx().push(0xFF00_0000u32); // write
 
-        control_sm.tx().push(0xFF01_0000u32);
+        control_sm.tx().push(0xFF01_0000u32); // read
+        let read = read_sm.rx().pull();  // read payload
 
         Timer::after(Duration::from_micros(500)).await;
 

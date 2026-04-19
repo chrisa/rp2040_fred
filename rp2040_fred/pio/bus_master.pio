@@ -75,17 +75,25 @@ jmp start             side 0b0110
 .side_set 1
 .wrap_target
 
+
+; read from fifo - expecting three bytes: 0xff for pindirs, then data, then 0x00 for pindirs
+; and assert direction control
+pull block            side 0
+
 ; wait for interrupt from control
 wait 1 irq 0          side 0
 
-; read from fifo - expecting three bytes: 0xff for pindirs, then data, then 0x00 for pindirs
-pull block            side 0
-
-; set data bus to write and assert direction pin
+; set data bus to write
 out pindirs, 8        side 1
 
 ; write data
-out pins, 8 [10]      side 1; delay to keep data on bus
+out pins, 8           side 1
+
+; wait for end of cycle
+wait 0 gpio 16        side 1
+
+; deassert data bus
+out pins, 8           side 1
 
 ; deassert direction pin and switch bus back to read
 out pindirs, 8        side 0
