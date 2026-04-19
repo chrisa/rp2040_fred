@@ -15,75 +15,58 @@
 ; 2 - clock going high
 ; 3 - clock going low
 
+// side set 16
 .program fred_bm_clock
-.side_set 1
+.side_set 1 pindirs
 .wrap_target
-
-set x, 7            side 1
-
-delay_loop1:
-
-; loop unless ready
-jmp x-- delay_loop1  side 1
-
-; send the irq
-irq nowait 2            side 0
-
-set x, 7            side 0
-
-delay_loop0:
-
-; loop unless ready
-jmp x-- delay_loop0  side 0
-
-; send the irq
-irq nowait 3            side 1
-
+nop side 1
+nop side 0
 .wrap
+
+
+; .program fred_bm_control
+; .side_set 4 opt pindirs
+; .wrap_target
+; pull block   side 0b1110
+; wait 0 gpio 16 side 0b1110
+; wait 1 gpio 16 side 0b1110
+; wait 0 gpio 16 side 0b1111
+; .wrap
 
 
 
 ; out pins 8-15
-; side_set 16, 17, 18, 19, 20
+; side_set 17, 18, 19, 20
 .program fred_bm_control
-.side_set 5 pindirs
+.side_set 4 pindirs
 
-.wrap_target
 start:
-
 ;                            /----- FRED
 ;                            |/---- IRQ
 ;                            ||/--- NMI   
-;                            |||/-- 1MHzE
-;                            ||||/- RnW
-;                            |||||
-wait 1 irq 2          side 0b11110 ; wait for clock high
+;                            |||/-- RnW
+;                            ||||
+;                            ||||
+pull block            side 0b1110 ; 
 
-jmp !x write_cycle    side 0b11100
-jmp !y read_cycle     side 0b11100
+wait 0 gpio 16        side 0b1110 ; wait for low, to sync
+wait 1 gpio 16        side 0b1110 ; wait for clock high
+out pins, 8           side 0b1110 ; address to bus
 
-no_cycle:
-wait 1 irq 3          side 0b11100
-jmp start             side 0b11110
-
-write_cycle:
-pull block            side 0b11111 ; RnW low, FRED low
-out pins, 8           side 0b11111 ; address to bus
-irq nowait 0          side 0b11101 ; data to bus
-wait 1 irq 3          side 0b11101 ; wait for clock low
-nop                   side 0b01110 ; RnW high, FRED high, clock low
-out pins, 8           side 0b01110 ; zeros to bus
-jmp start             side 0b01110 
+mov x, osr            side 0b1110 ; prepare to choose r/w
+jmp !x write_cycle    side 0b1110
 
 read_cycle:
-pull block            side 0b11110 ; FRED low
-out pins, 8           side 0b11110 ; address to bus
-irq nowait 1          side 0b11100 ; read data
-wait 1 irq 3          side 0b11100 ; wait for clock low
-nop                   side 0b01110 ; clock low, FRED high
-out pins, 8           side 0b01110 ; zeros to bus
+irq nowait 1          side 0b1110 ; read data
+wait 0 gpio 16        side 0b1110 ; wait for clock low
+out pins, 8           side 0b0110 ; zeros to bus
+jmp start             side 0b0110
 
-.wrap
+write_cycle:
+irq nowait 0          side 0b1111 ; data to bus
+wait 0 gpio 16        side 0b1111 ; wait for clock low
+out pins, 8           side 0b0110 ; zeros to bus
+jmp start             side 0b0110 
 
 
 ; side_set 27

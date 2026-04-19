@@ -352,18 +352,21 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let p20 = pio0.common.make_pio_pin(pio_resources.pin_20);
     // let p21 = pio0.common.make_pio_pin(pio_resources.pin_21);
     let p27 = pio0.common.make_pio_pin(pio_resources.pin_27);
-    let p28 = pio0.common.make_pio_pin(pio_resources.pin_28);
+    // let p28 = pio0.common.make_pio_pin(pio_resources.pin_28);
 
     let data_bus_pins = [&p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7];
 
     let addr_bus_pins = [&p8, &p9, &p10, &p11, &p12, &p13, &p14, &p15];
 
     let control_pins = [
-        &p16, // RnW
-        &p17, // 1MHz
+        &p17, // RnW
         &p18, // NMI
         &p19, // IRQ
         &p20, // FRED
+    ];
+
+    let clock_pin = [
+        &p16, // 1MHzE
     ];
 
     let data_dir_pin = [&p27];
@@ -373,11 +376,12 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     clock_sm.set_pin_dirs(Direction::In, &data_bus_pins);
     clock_sm.set_pin_dirs(Direction::Out, &addr_bus_pins);
     clock_sm.set_pin_dirs(Direction::Out, &data_dir_pin);
-    clock_sm.set_pin_dirs(Direction::Out, &[&p28]);
 
     // setting up control pins for open-drain output
     clock_sm.set_pins(Level::Low, &control_pins);
     clock_sm.set_pin_dirs(Direction::In, &control_pins);
+    clock_sm.set_pins(Level::Low, &clock_pin);
+    clock_sm.set_pin_dirs(Direction::In, &clock_pin);
 
     clock_sm.clear_fifos();
     control_sm.clear_fifos();
@@ -385,14 +389,14 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     read_sm.clear_fifos();
 
     let mut clock_cfg = Config::default();
-    clock_cfg.use_program(&clock_program, &[&p28]);
-    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
+    clock_cfg.use_program(&clock_program, &clock_pin);
+    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000);
     clock_sm.set_config(&clock_cfg);
 
     let mut control_cfg = Config::default();
     control_cfg.use_program(&control_program, &control_pins);
     control_cfg.set_out_pins(&addr_bus_pins);
-    control_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
+    control_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000_000);
     control_cfg.shift_out = ShiftConfig {
         threshold: 32,
         direction: ShiftDirection::Left,
@@ -445,15 +449,11 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
         // 3. Poll `F0` again until bit 0 clears.
         // 4. Read one response byte from `F1`.
 
-        set_write_cycle(&mut control_sm);
         control_sm.tx().push(0xFF00_0000u32);
 
-        set_read_cycle(&mut control_sm);
-        control_sm.tx().push(0xFF00_0000u32);
+        control_sm.tx().push(0xFF01_0000u32);
 
-        set_cycle(&mut control_sm, false, false);
-
-        // Timer::after(Duration::from_micros(500)).await;
+        Timer::after(Duration::from_micros(500)).await;
 
     }
 }
