@@ -14,7 +14,7 @@ use embassy_rp::{clocks::ClockConfig, gpio};
 use embassy_time::{Duration, Instant, Timer};
 use embassy_usb::class::cmsis_dap_v2::{CmsisDapV2Class, State as CmsisState};
 use embassy_usb::msos;
-use embassy_usb::{Builder, Config};
+use embassy_usb::{Builder, Config as UsbConfig};
 use gpio::{Level, Output};
 use panic_probe as _;
 use rp2040_fred_protocol::bridge_proto::{Packet, MIN_PACKET_SIZE, PACKET_SIZE};
@@ -54,8 +54,9 @@ const USB_DECODE_BURST_SAMPLES: usize = 512;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    ClockConfig::system_freq(125_000_000).expect("set clock failed?");
-    let p = embassy_rp::init(Default::default());
+    let clock_config = ClockConfig::system_freq(125_000_000).expect("set clock failed?");
+    let config = embassy_rp::config::Config::new(clock_config);
+    let p = embassy_rp::init(config);
     let r = split_resources!(p);
 
     let mut transport = cfg_select! {
@@ -76,7 +77,7 @@ async fn main(_spawner: Spawner) {
     let driver = usb::Driver::new(r.usb.usb, Irqs);
     log_info!("usb driver initialized");
 
-    let mut usb_config = Config::new(0x2E8A, 0x000A);
+    let mut usb_config = UsbConfig::new(0x2E8A, 0x000A);
     usb_config.manufacturer = Some("TCL125");
     usb_config.product = Some("RP2040 FRED Bridge");
     usb_config.serial_number = Some("TCL125-USB-01");

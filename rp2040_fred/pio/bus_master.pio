@@ -12,89 +12,76 @@
 ; IRQs
 ; 0 - trigger data write
 ; 1 - trigger data read
-; 2 - unused
-; 3 - clock timer
-
+; 2 - clock going high
+; 3 - clock going low
 
 .program fred_bm_clock
+.side_set 1
 .wrap_target
 
-; establish clock period - control will wait for this irq twice per cycle
-set x, 10
+set x, 7            side 1
 
-delay_loop:
+delay_loop1:
 
 ; loop unless ready
-jmp x-- delay_loop
+jmp x-- delay_loop1  side 1
 
 ; send the irq
-irq set 3
+irq nowait 2            side 0
+
+set x, 7            side 0
+
+delay_loop0:
+
+; loop unless ready
+jmp x-- delay_loop0  side 0
+
+; send the irq
+irq nowait 3            side 1
 
 .wrap
+
 
 
 ; out pins 8-15
 ; side_set 16, 17, 18, 19, 20
 .program fred_bm_control
-.side_set 5
-.wrap_target
+.side_set 5 pindirs
 
+.wrap_target
 start:
 
-; ensure X is 0
-mov x, null           side 0b10111
+;                            /----- FRED
+;                            |/---- IRQ
+;                            ||/--- NMI   
+;                            |||/-- 1MHzE
+;                            ||||/- RnW
+;                            |||||
+wait 1 irq 2          side 0b11110 ; wait for clock high
 
-; fetch a word from the fifo, or 0x00000000 (from X)
-pull noblock          side 0b10111
+jmp !x write_cycle    side 0b11100
+jmp !y read_cycle     side 0b11100
 
-; wait for clock timer
-wait 1 irq 3          side 0b10111
+no_cycle:
+wait 1 irq 3          side 0b11100
+jmp start             side 0b11110
 
-; if 0, do a read cycle
-jmp !y read_cycle     side 0b10111
-
-; otherwise, do a write cycle
 write_cycle:
-
-; put address on the bus, set RnW low and assert FRED low
-out pins, 8            side 0b00110
-
-; clock goes high, wait
-nop                   side 0b01110
-
-; then put data on the bus
-irq set 0             side 0b01110
-
-; wait for clock timer again
-wait 1 irq 3          side 0b01110
-
-; clock goes low
-nop                   side 0b00110
-
-; then remove FRED and RnW
-nop                   side 0b10111
-
-jmp start             side 0b10111
+pull block            side 0b11111 ; RnW low, FRED low
+out pins, 8           side 0b11111 ; address to bus
+irq nowait 0          side 0b11101 ; data to bus
+wait 1 irq 3          side 0b11101 ; wait for clock low
+nop                   side 0b01110 ; RnW high, FRED high, clock low
+out pins, 8           side 0b01110 ; zeros to bus
+jmp start             side 0b01110 
 
 read_cycle:
-
-; put address on the bus and assert FRED low
-out pins, 8           side 0b10110
-
-; clock goes high, wait
-nop                   side 0b11110
-
-; then read data from the bus
-irq set 1             side 0b11110
-
-; wait for clock timer again
-wait 1 irq 3          side 0b11110
-
-; clock goes low
-nop                   side 0b10110
-
-; then remove FRED and RnW
-nop                   side 0b10111
+pull block            side 0b11110 ; FRED low
+out pins, 8           side 0b11110 ; address to bus
+irq nowait 1          side 0b11100 ; read data
+wait 1 irq 3          side 0b11100 ; wait for clock low
+nop                   side 0b01110 ; clock low, FRED high
+out pins, 8           side 0b01110 ; zeros to bus
 
 .wrap
 
@@ -126,7 +113,6 @@ out pindirs, 8        side 0
 
 ; in_pins 0-7
 .program fred_bm_data_read
-.side_set 1 opt
 .wrap_target
 
 ; wait for interrupt from control
@@ -139,5 +125,3 @@ in pins, 8
 push block
 
 .wrap
-
-

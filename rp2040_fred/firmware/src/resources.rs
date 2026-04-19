@@ -32,6 +32,8 @@ assign_resources! {
         pin_18: PIN_18,
         pin_19: PIN_19,
         pin_20: PIN_20,
+        pin_21: PIN_21,
+        pin_22: PIN_22,
         pin_26: PIN_26,
         pin_27: PIN_27,
         pin_28: PIN_28,
