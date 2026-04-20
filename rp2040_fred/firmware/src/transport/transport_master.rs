@@ -274,14 +274,9 @@ impl Transport for PioTransport {
 
 #[embassy_executor::task]
 async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'static, u32>) -> ! {
-
-    log_info!("running core1_loop");
-
     // address data-dir high for output.
     let mut data_dir_a = Output::new(pio_resources.pin_26, Level::High);
     data_dir_a.set_high();
-
-    log_info!("set p26 high");
 
     let fred_bm_clock = pio::pio_file!(
         "../pio/bus_master.pio",
@@ -307,8 +302,6 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
         options(max_program_size = 32)
     );
 
-    log_info!("PIO programs read");
-
     let mut pio0 = Pio::new(pio_resources.pio0, Pio0Irqs);
 
     let mut clock_sm = pio0.sm0;
@@ -316,16 +309,10 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let mut write_sm = pio0.sm2;
     let mut read_sm = pio0.sm3;
 
-    log_info!("got SMs");
-
     let clock_program = pio0.common.load_program(&fred_bm_clock.program);
-    log_info!("loaded sm0");
     let control_program = pio0.common.load_program(&fred_bm_control.program);
-    log_info!("loaded sm1");
     let write_program = pio0.common.load_program(&fred_bm_data_write.program);
-    log_info!("loaded sm2");
     let read_program = pio0.common.load_program(&fred_bm_data_read.program);
-    log_info!("loaded sm3");
 
     log_info!("PIO programs loaded");
 
@@ -371,8 +358,6 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
 
     let data_dir_pin = [&p27];
 
-    log_info!("starting PIO pin setup");
-
     clock_sm.set_pin_dirs(Direction::In, &data_bus_pins);
     clock_sm.set_pin_dirs(Direction::Out, &addr_bus_pins);
     clock_sm.set_pin_dirs(Direction::Out, &data_dir_pin);
@@ -407,7 +392,7 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let mut write_cfg = Config::default();
     write_cfg.use_program(&write_program, &data_dir_pin);
     write_cfg.set_out_pins(&data_bus_pins);
-    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
+    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000_000);
     write_cfg.shift_out = ShiftConfig {
         threshold: 32,
         direction: ShiftDirection::Left,
@@ -418,12 +403,13 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let mut read_cfg = Config::default();
     read_cfg.use_program(&read_program, &[]);
     read_cfg.set_in_pins(&data_bus_pins);
-    read_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
+    read_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000_000);
+    read_cfg.shift_out = ShiftConfig {
+        threshold: 32,
+        direction: ShiftDirection::Left,
+        auto_fill: false,
+    };
     read_sm.set_config(&read_cfg);
-
-    set_cycle(&mut control_sm, false, false);
-
-    log_info!("enabling SMs");
 
     let mut batch = PioBatch::new();
     batch.restart(&mut clock_sm);
@@ -454,45 +440,40 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
         // 3. Poll `F0` again until bit 0 clears.
         // 4. Read one response byte from `F1`.
 
-        write_sm.tx().push(0xFFFF_0000u32);   // write payload FF <data> 00 00
-        control_sm.tx().push(0xFF00_0000u32); // write
+        for _ in 1..10 {
+            read_cycle(&mut control_sm, &mut read_sm, 0xFF).await;
+        }
 
-        control_sm.tx().push(0xFF01_0000u32); // read
-        let read = read_sm.rx().pull();  // read payload
+        write_cycle(&mut control_sm, &mut write_sm, 0xFF, 0xFF).await;
 
-        Timer::after(Duration::from_micros(500)).await;
+        for _ in 1..10 {
+            read_cycle(&mut control_sm, &mut read_sm, 0xFF).await;
+        }
+
+        read_cycle(&mut control_sm, &mut read_sm, 0xFF).await;
+
+        Timer::after(Duration::from_micros(1000)).await;
 
     }
 }
 
-fn set_write_cycle<P: Instance, const S: usize>(sm: &mut StateMachine<P, S>) {
-    set_cycle(sm, true, false);
-}
-fn set_read_cycle<P: Instance, const S: usize>(sm: &mut StateMachine<P, S>) {
-    set_cycle(sm, false, true);
+async fn write_cycle<'d, P: Instance, const SC: usize, const SW: usize>(
+    control_sm: &mut StateMachine<'d, P, SC>,
+    write_sm: &mut StateMachine<'d, P, SW>,
+    addr: u8, data: u8
+) {
+    let data_payload = 0xFF00_0000u32 | ((data as u32) << 16);
+    let addr_payload = 0x0000_0000u32 | ((addr as u32) << 24);
+    write_sm.tx().wait_push(data_payload).await;
+    control_sm.tx().wait_push(addr_payload).await;
 }
 
-fn set_cycle<P: Instance, const S: usize>(sm: &mut StateMachine<P, S>, write: bool, read: bool) {
-    unsafe {
-        sm.exec_instr(
-            pio::Instruction {
-                operands: pio::InstructionOperands::SET {
-                    destination: pio::SetDestination::X,
-                    data: if write { 0 } else { 1 }
-                },
-                delay: 0,
-                side_set: None
-            }.encode(SideSet::default())
-        );
-        sm.exec_instr(
-            pio::Instruction {
-                operands: pio::InstructionOperands::SET {
-                    destination: pio::SetDestination::Y,
-                    data: if read { 0 } else { 1 }
-                },
-                delay: 0,
-                side_set: None
-            }.encode(SideSet::default())
-        );
-    }
+async fn read_cycle<'d, P: Instance, const SC: usize, const SR: usize>(
+    control_sm: &mut StateMachine<'d, P, SC>,
+    read_sm: &mut StateMachine<'d, P, SR>,
+    addr: u8
+) -> u8 {
+    let addr_payload = 0x0001_0000u32 | ((addr as u32) << 24);
+    control_sm.tx().wait_push(addr_payload).await;
+    read_sm.rx().wait_pull().await as u8
 }

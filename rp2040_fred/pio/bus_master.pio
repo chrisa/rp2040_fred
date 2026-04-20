@@ -59,12 +59,14 @@ jmp !x write_cycle    side 0b1111
 read_cycle:
 irq nowait 1          side 0b0111 ; read data
 wait 0 gpio 16        side 0b0111 ; wait for clock low
+out pins, 8           side 0b0111 ; (non)zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
 jmp start             side 0b0111
 
 write_cycle:
 irq nowait 0          side 0b0110 ; data to bus
 wait 0 gpio 16        side 0b0110 ; wait for clock low
+out pins, 8           side 0b0111 ; zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
 jmp start             side 0b0111 
 
