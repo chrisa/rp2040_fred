@@ -1,13 +1,14 @@
 
 ;   bits [7:0]   -> D0..D7
 ;   bits [15:8]  -> A0..A7
-;   bit 16       -> RnW
-;   bit 17       -> 1MHZE
+;   bit 16       -> 1MHZE
+;   bit 17       -> RnW
 ;   bit 18       -> unused
 ;   bit 19       -> unused
 ;   bit 20       -> FRED_N
 
-; 1MHz clock output, 20MHz PIO system clock
+; 1MHz clock output, 50MHz PIO system clocks
+; (except for clock SM @2MHz)
 
 ; IRQs
 ; 0 - trigger data write
@@ -15,24 +16,13 @@
 ; 2 - clock going high
 ; 3 - clock going low
 
-// side set 16
+; side set 16
 .program fred_bm_clock
 .side_set 1
 .wrap_target
 nop side 1
 nop side 0
 .wrap
-
-
-; .program fred_bm_control
-; .side_set 4 opt pindirs
-; .wrap_target
-; pull block   side 0b1110
-; wait 0 gpio 16 side 0b1110
-; wait 1 gpio 16 side 0b1110
-; wait 0 gpio 16 side 0b1111
-; .wrap
-
 
 
 ; out pins 8-15
