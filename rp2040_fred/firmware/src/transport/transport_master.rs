@@ -376,13 +376,13 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
 
     let mut clock_cfg = Config::default();
     clock_cfg.use_program(&clock_program, &clock_pins);
-    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 8_000_000);
+    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 16_000_000);
     clock_sm.set_config(&clock_cfg);
 
     let mut control_cfg = Config::default();
     control_cfg.use_program(&control_program, &control_pins);
     control_cfg.set_out_pins(&addr_bus_pins);
-    control_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000_000);
+    control_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 40_000_000);
     control_cfg.shift_out = ShiftConfig {
         threshold: 32,
         direction: ShiftDirection::Left,
@@ -393,7 +393,7 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let mut write_cfg = Config::default();
     write_cfg.use_program(&write_program, &data_dir_pin);
     write_cfg.set_out_pins(&data_bus_pins);
-    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000_000);
+    write_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
     write_cfg.shift_out = ShiftConfig {
         threshold: 32,
         direction: ShiftDirection::Left,

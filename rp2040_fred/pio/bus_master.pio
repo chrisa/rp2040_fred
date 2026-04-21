@@ -13,16 +13,16 @@
 ; IRQs
 ; 0 - trigger data write
 ; 1 - trigger data read
-; 2 - clock going high
+; 2 - after clock high
 ; 3 - clock going low
 
 ; side set 16
 .program fred_bm_clock
 .side_set 1
 .wrap_target
-irq clear 2     side 0b0
-nop         [3] side 0b1
-irq clear 3 [2] side 0b0
+irq clear 3   [7]  side 0
+nop                side 1
+irq clear 2   [6]  side 1
 .wrap
 
 
@@ -41,7 +41,7 @@ start:
 pull block            side 0b1111 ; 
 
 ; wait 0 gpio 22        side 0b1111 ; wait for low, to sync
-irq wait 2            side 0b1111 ; wait for PRE-clock high
+irq wait 3            side 0b1111 ; wait for PRE-clock high
 out pins, 8           side 0b1111 ; address to bus
 
 mov x, osr            side 0b1111 ; prepare to choose r/w
@@ -49,14 +49,14 @@ jmp !x write_cycle    side 0b1111
 
 read_cycle:
 irq nowait 1          side 0b0111 ; read data
-irq wait 3            side 0b0111 ; wait for clock low
+irq wait 3      [1]   side 0b0111 ; wait for clock low
 out pins, 8           side 0b0111 ; (non)zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
 jmp start             side 0b0111
 
 write_cycle:
-irq nowait 0          side 0b0110 ; data to bus
-irq wait 3            side 0b0110 ; wait for clock low
+irq clear 0           side 0b0110 ; data to bus
+irq wait 3      [1]   side 0b0110 ; wait for clock low
 out pins, 8           side 0b0111 ; zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
 jmp start             side 0b0111 
@@ -73,16 +73,19 @@ jmp start             side 0b0111
 pull block            side 0
 
 ; wait for interrupt from control
-wait 1 irq 0          side 0
+irq wait 0            side 0
 
 ; set data bus to write
-out pindirs, 8        side 1
+out pindirs, 8        side 0
+
+; wait for post-high irq
+irq wait 2            side 1
 
 ; write data
 out pins, 8           side 1
 
 ; wait for end of cycle
-irq wait 3          side 1
+irq wait 3       [1]  side 1
 
 ; deassert data bus
 out pins, 8      [3]  side 1
