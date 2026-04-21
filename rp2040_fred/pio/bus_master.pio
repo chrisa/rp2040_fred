@@ -20,8 +20,9 @@
 .program fred_bm_clock
 .side_set 1
 .wrap_target
-nop side 1
-nop side 0
+irq clear 2     side 0b0
+nop         [3] side 0b1
+irq clear 3 [2] side 0b0
 .wrap
 
 
@@ -39,8 +40,8 @@ start:
 ;                            ||||
 pull block            side 0b1111 ; 
 
-wait 0 gpio 16        side 0b1111 ; wait for low, to sync
-wait 1 gpio 16        side 0b1111 ; wait for clock high
+; wait 0 gpio 22        side 0b1111 ; wait for low, to sync
+irq wait 2            side 0b1111 ; wait for PRE-clock high
 out pins, 8           side 0b1111 ; address to bus
 
 mov x, osr            side 0b1111 ; prepare to choose r/w
@@ -48,14 +49,14 @@ jmp !x write_cycle    side 0b1111
 
 read_cycle:
 irq nowait 1          side 0b0111 ; read data
-wait 0 gpio 16        side 0b0111 ; wait for clock low
+irq wait 3            side 0b0111 ; wait for clock low
 out pins, 8           side 0b0111 ; (non)zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
 jmp start             side 0b0111
 
 write_cycle:
 irq nowait 0          side 0b0110 ; data to bus
-wait 0 gpio 16        side 0b0110 ; wait for clock low
+irq wait 3            side 0b0110 ; wait for clock low
 out pins, 8           side 0b0111 ; zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
 jmp start             side 0b0111 
@@ -66,7 +67,6 @@ jmp start             side 0b0111
 .program fred_bm_data_write
 .side_set 1
 .wrap_target
-
 
 ; read from fifo - expecting three bytes: 0xff for pindirs, then data, then 0x00 for pindirs
 ; and assert direction control
@@ -82,13 +82,15 @@ out pindirs, 8        side 1
 out pins, 8           side 1
 
 ; wait for end of cycle
-wait 0 gpio 16        side 1
+irq wait 3          side 1
 
 ; deassert data bus
-out pins, 8           side 1
+out pins, 8      [3]  side 1
 
 ; deassert direction pin and switch bus back to read
 out pindirs, 8        side 0
+
+
 
 .wrap
 

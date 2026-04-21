@@ -337,7 +337,8 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     let p18 = pio0.common.make_pio_pin(pio_resources.pin_18);
     let p19 = pio0.common.make_pio_pin(pio_resources.pin_19);
     let p20 = pio0.common.make_pio_pin(pio_resources.pin_20);
-    // let p21 = pio0.common.make_pio_pin(pio_resources.pin_21);
+    let p21 = pio0.common.make_pio_pin(pio_resources.pin_21);
+    let p22 = pio0.common.make_pio_pin(pio_resources.pin_22);
     let p27 = pio0.common.make_pio_pin(pio_resources.pin_27);
     // let p28 = pio0.common.make_pio_pin(pio_resources.pin_28);
 
@@ -352,7 +353,7 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
         &p20, // FRED
     ];
 
-    let clock_pin = [
+    let clock_pins = [
         &p16, // 1MHzE
     ];
 
@@ -365,8 +366,8 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     // setting up control pins for open-drain output
     clock_sm.set_pins(Level::Low, &control_pins);
     clock_sm.set_pin_dirs(Direction::Out, &control_pins);
-    clock_sm.set_pins(Level::Low, &clock_pin);
-    clock_sm.set_pin_dirs(Direction::Out, &clock_pin);
+    clock_sm.set_pins(Level::Low, &clock_pins);
+    clock_sm.set_pin_dirs(Direction::Out, &clock_pins);
 
     clock_sm.clear_fifos();
     control_sm.clear_fifos();
@@ -374,8 +375,8 @@ async fn core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'st
     read_sm.clear_fifos();
 
     let mut clock_cfg = Config::default();
-    clock_cfg.use_program(&clock_program, &clock_pin);
-    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 2_000_000);
+    clock_cfg.use_program(&clock_program, &clock_pins);
+    clock_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 8_000_000);
     clock_sm.set_config(&clock_cfg);
 
     let mut control_cfg = Config::default();
