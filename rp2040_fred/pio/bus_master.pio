@@ -1,4 +1,3 @@
-
 ;   bits [7:0]   -> D0..D7
 ;   bits [15:8]  -> A0..A7
 ;   bit 16       -> 1MHZE
@@ -30,22 +29,20 @@ irq clear 2   [6]  side 1
 ; side_set 17, 18, 19, 20
 .program fred_bm_control
 .side_set 4
-
+.wrap_target
 start:
 ;                            /----- FRED
 ;                            |/---- IRQ
 ;                            ||/--- NMI   
 ;                            |||/-- RnW
 ;                            ||||
-;                            ||||
 pull block            side 0b1111 ; 
 
-; wait 0 gpio 22        side 0b1111 ; wait for low, to sync
 irq wait 3            side 0b1111 ; wait for PRE-clock high
 out pins, 8           side 0b1111 ; address to bus
 
 mov x, osr            side 0b1111 ; prepare to choose r/w
-jmp !x write_cycle    side 0b1111
+jmp !x write_cycle    side 0b1111 ; 1 - read 0 - write
 
 read_cycle:
 irq nowait 1          side 0b0111 ; read data
@@ -59,57 +56,29 @@ irq clear 0           side 0b0110 ; data to bus
 irq wait 3      [1]   side 0b0110 ; wait for clock low
 out pins, 8           side 0b0111 ; zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
-jmp start             side 0b0111 
-
+.wrap
 
 ; side_set 27
 ; out_pins 0-7
 .program fred_bm_data_write
 .side_set 1
 .wrap_target
-
-; read from fifo - expecting three bytes: 0xff for pindirs, then data, then 0x00 for pindirs
-; and assert direction control
-pull block            side 0
-
-; wait for interrupt from control
-irq wait 0            side 0
-
-; set data bus to write
-out pindirs, 8        side 0
-
-; wait for post-high irq
-irq wait 2            side 1
-
-; write data
-out pins, 8           side 1
-
-; wait for end of cycle
-irq wait 3       [1]  side 1
-
-; deassert data bus
-out pins, 8      [3]  side 1
-
-; deassert direction pin and switch bus back to read
-out pindirs, 8        side 0
-
-
-
+; expecting three bytes: 0xff for pindirs, then data, then 0x00 for pindirs
+pull block            side 0 ; read from fifo
+irq wait 0            side 0 ; wait for interrupt from control
+out pindirs, 8        side 0 ; set data bus to write
+irq wait 2            side 1 ; wait for post-high irq
+out pins, 8           side 1 ; write data
+irq wait 3       [1]  side 1 ; wait for end of cycle; delay for t_dhw
+out pins, 8      [3]  side 1 ; deassert data bus; delay to force output to 0v.
+out pindirs, 8        side 0 ; deassert direction pin and switch bus back to read
 .wrap
-
 
 
 ; in_pins 0-7
 .program fred_bm_data_read
 .wrap_target
-
-; wait for interrupt from control
-wait 1 irq 1
-
-; read data
-in pins, 8
-
-; push data
-push block
-
+wait 1 irq 1    ; wait for interrupt from control
+in pins, 8      ; read data
+push block      ; push data
 .wrap
