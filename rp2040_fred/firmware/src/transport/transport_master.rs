@@ -4,43 +4,40 @@ use embassy_executor::Executor;
 use embassy_rp::multicore::Stack;
 use embassy_time::{Duration, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
-use portable_atomic::{AtomicBool, AtomicU32, Ordering};
+use portable_atomic::{AtomicU32, Ordering};
 use static_cell::StaticCell;
 
 use crate::resources::{Core1Resources, PioResources};
-use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
+use rp2040_fred_protocol::trace_decode::{
+    AxisSnapshot, FeedbackCommand, FeedbackDecoder, FeedbackSnapshot,
+};
 
 mod bus;
 use bus::Bus;
 
 const FLAG_ENABLED: u8 = 1 << 0;
 
-const TRACE_SAMPLE_RING_LEN: usize = 16_384;
+const COMMAND_RING_LEN: usize = 256;
 const CORE1_STACK_SIZE: usize = 4096;
 
-static TRACE_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(true);
-static TRACE_QUEUE_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
-static TRACE_RXSTALL_COUNT: AtomicU32 = AtomicU32::new(0);
-static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
+static COMMAND_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+static COMMAND_RING: StaticCell<Queue<FeedbackCommand, COMMAND_RING_LEN>> = StaticCell::new();
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 pub struct PioTransport {
-    trace_samples: Consumer<'static, u32>,
-    capture_enabled: bool,
+    commands: Consumer<'static, FeedbackCommand>,
     telemetry_enabled: bool,
     packet_seq: u16,
-    sample_seq: u64,
     decoder: FeedbackDecoder,
     current_snapshot: FeedbackSnapshot,
     snapshot_valid: bool,
     telemetry_period_ms: u16,
     next_telemetry_due_ms: u64,
-    // bus: ThisBus<'a>,
 }
 
 use crate::transport::Transport;
-use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
+use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 
 impl Transport for PioTransport {
     fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
@@ -49,25 +46,11 @@ impl Transport for PioTransport {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
                 1
             }
-            MsgType::CaptureSet => {
-                if req.payload_len < 1 {
-                    out[0] = Packet::nack(req.seq, MsgType::CaptureSet as u8, 1);
-                } else {
-                    self.telemetry_enabled = req.payload[0] == 0;
-                    self.capture_enabled = req.payload[0] != 0;
-                    TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
-                    self.reset_stream_state();
-                    out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
-                }
-                1
-            }
             MsgType::TelemetrySet => {
                 if req.payload_len < 1 {
                     out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 1);
                 } else {
-                    self.capture_enabled = req.payload[0] == 0;
                     self.telemetry_enabled = req.payload[0] != 0;
-                    TRACE_CAPTURE_ENABLED.store(self.telemetry_enabled, Ordering::Relaxed); // weird, but must capture to decode
                     self.reset_stream_state();
                     if req.payload_len >= 3 {
                         self.telemetry_period_ms =
@@ -78,11 +61,7 @@ impl Transport for PioTransport {
                 1
             }
             _ => {
-                if self.capture_enabled {
-                    out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x10);
-                } else {
-                    out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x11);
-                }
+                out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x11);
                 1
             }
         }
@@ -95,48 +74,19 @@ impl Transport for PioTransport {
 
         let mut processed = 0usize;
         while processed < budget {
-            let Some(sample) = self.trace_samples.dequeue() else {
+            let Some(command) = self.commands.dequeue() else {
                 break;
             };
 
-            if let Some(snapshot) = self.decoder.ingest_sample(self.sample_seq, sample) {
+            if let Some(snapshot) = self.decoder.ingest_command(command) {
                 self.current_snapshot = snapshot;
                 self.snapshot_valid = true;
             }
-            self.sample_seq = self.sample_seq.wrapping_add(1);
             processed += 1;
         }
     }
 
     fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
-        if self.capture_enabled {
-            let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
-            let mut used = 0usize;
-
-            while used < batch.len() {
-                let Some(sample) = self.trace_samples.dequeue() else {
-                    break;
-                };
-                batch[used] = sample;
-                used += 1;
-            }
-
-            if used == 0 {
-                return None;
-            }
-
-            let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
-            let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
-            let pkt = Packet::trace_samples(
-                self.packet_seq,
-                dropped_samples_total,
-                rx_stall_count_total,
-                &batch[..used],
-            );
-            self.packet_seq = self.packet_seq.wrapping_add(1);
-            return Some(pkt);
-        }
-
         if self.telemetry_enabled {
             if !self.snapshot_valid || now_ms < self.next_telemetry_due_ms {
                 return None;
@@ -154,30 +104,24 @@ impl Transport for PioTransport {
             self.next_telemetry_due_ms = now_ms + self.telemetry_period_ms.max(1) as u64;
             return Some(pkt);
         }
-
         None
     }
 
     fn has_decode_work(&self) -> bool {
-        self.telemetry_enabled && self.trace_samples.ready()
+        self.telemetry_enabled && self.commands.ready()
     }
 
     fn has_outgoing_packet(&self, now_ms: u64) -> bool {
-        if self.capture_enabled {
-            return self.trace_samples.ready();
-        }
         self.telemetry_enabled && self.snapshot_valid && now_ms >= self.next_telemetry_due_ms
     }
 }
 
 impl PioTransport {
     pub fn new(core1_resources: Core1Resources, pio_resources: PioResources) -> Self {
-        let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
-        let (producer, consumer) = trace_ring.split();
+        let command_ring = COMMAND_RING.init(Queue::new());
+        let (producer, consumer) = command_ring.split();
 
-        // TRACE_CAPTURE_ENABLED.store(true, Ordering::Relaxed);
-        // TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
-        // TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
+        COMMAND_DROP_COUNT.store(0, Ordering::Relaxed);
 
         embassy_rp::multicore::spawn_core1(
             core1_resources.core1,
@@ -189,11 +133,9 @@ impl PioTransport {
         );
 
         Self {
-            trace_samples: consumer,
-            capture_enabled: false,
+            commands: consumer,
             telemetry_enabled: false,
             packet_seq: 1,
-            sample_seq: 0,
             decoder: FeedbackDecoder::new(),
             current_snapshot: FeedbackSnapshot {
                 sample_index: 0,
@@ -214,13 +156,12 @@ impl PioTransport {
         }
     }
 
-    fn clear_trace_samples(&mut self) {
-        while self.trace_samples.dequeue().is_some() {}
+    fn clear_commands(&mut self) {
+        while self.commands.dequeue().is_some() {}
     }
 
     fn reset_stream_state(&mut self) {
         self.packet_seq = 1;
-        self.sample_seq = 0;
         self.decoder = FeedbackDecoder::new();
         self.current_snapshot = FeedbackSnapshot {
             sample_index: 0,
@@ -237,9 +178,8 @@ impl PioTransport {
         };
         self.snapshot_valid = false;
         self.next_telemetry_due_ms = 0;
-        TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
-        TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
-        self.clear_trace_samples();
+        COMMAND_DROP_COUNT.store(0, Ordering::Relaxed);
+        self.clear_commands();
     }
 
     fn flags(&self) -> u8 {
@@ -252,31 +192,27 @@ impl PioTransport {
 }
 
 #[embassy_executor::task]
-async fn core1_loop(pio_resources: PioResources, mut _trace_samples: Producer<'static, u32>) -> ! {
+async fn core1_loop(
+    pio_resources: PioResources,
+    mut commands: Producer<'static, FeedbackCommand>,
+) -> ! {
     let mut bus = Bus::setup(pio_resources);
 
+    const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
+
+    let mut index = 0;
     loop {
-        // write/read loop:
-        // command sequence: `03,02,01,00,07,06,05,04,0D,0C`
-        // command is:
-        // 1. Poll `F0` until bit 0 clears.
-        // 2. Write one command byte to `80`.
-        // 3. Poll `F0` again until bit 0 clears.
-        // 4. Read one response byte from `F1`.
-
-        for _ in 1..10 {
-            bus.read_cycle(0xFF).await;
+        for cmd in CMD_SEQUENCE {
+            Timer::after(Duration::from_micros(100)).await;
+            let value = bus.command_cycle(cmd).await;
+            if commands
+                .enqueue(FeedbackCommand::from_bytes(index, cmd, value))
+                .is_err()
+            {
+                COMMAND_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+            index += 1;
         }
-
-        for _ in 1..10 {
-            bus.write_cycle(0xFF, 0xFF).await;
-        }
-
-        for _ in 1..10 {
-            bus.read_cycle(0xFF).await;
-        }
-
-        bus.read_cycle(0xFF).await;
 
         Timer::after(Duration::from_micros(1000)).await;
     }

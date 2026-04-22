@@ -43,6 +43,30 @@ pub struct Bus<
 pub type ThisBus<'a> = Bus<'a, PIO0, 0, 1, 2, 3>;
 
 impl<'a> ThisBus<'a> {
+    pub async fn command_cycle(&mut self, cmd: u8) -> u8 {
+        // 1. Poll `F0` until bit 0 clears.
+        // 2. Write one command byte to `80`.
+        // 3. Poll `F0` again until bit 0 clears.
+        // 4. Read one response byte from `F1`.
+        self.poll_until(0xF0, 0x01).await;
+        self.write_cycle(0x80, cmd).await;
+        self.poll_until(0xF0, 0x01).await;
+        self.read_cycle(0xF1).await
+    }
+
+    pub async fn poll_until(&mut self, addr: u8, mask: u8) {
+        let addr_payload = 0x0001_0000u32 | ((addr as u32) << 24);
+        self.read.clear_fifos();
+        loop {
+            self.control.tx().wait_push(addr_payload).await;
+            if let Some(r) = self.read.rx().try_pull() {
+                if (r >> 24) as u8 & mask == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
     pub async fn write_cycle(&mut self, addr: u8, data: u8) {
         let data_payload = 0xFF00_0000u32 | ((data as u32) << 16);
         // let addr_payload = 0x0000_0000u32 | ((addr as u32) << 24);

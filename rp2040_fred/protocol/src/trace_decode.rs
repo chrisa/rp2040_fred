@@ -177,6 +177,18 @@ pub fn counts_to_mm(snapshot: DroSnapshot, cal: Calibration) -> (f32, f32, u16) 
     (x_mm, z_mm, snapshot.rpm)
 }
 
+pub struct FeedbackCommand {
+    index: u64,
+    cmd: u8,
+    value: u8,
+}
+
+impl FeedbackCommand {
+    pub fn from_bytes(index: u64, cmd: u8, value: u8) -> Self {
+        Self { cmd, value, index }
+    }
+}
+
 pub struct FeedbackDecoder {
     pending_cmd: Option<u8>,
     x: AxisState,
@@ -236,13 +248,43 @@ impl FeedbackDecoder {
         }
 
         let cmd = self.pending_cmd.take()?;
-        self.apply_response(cmd, cycle.data);
 
-        if cmd != 0x0C {
+        self.ingest_command(FeedbackCommand::from_bytes(sample_index, cmd, cycle.data))
+    }
+
+    pub fn ingest_command(
+        &mut self,
+        command: FeedbackCommand
+    ) -> Option<FeedbackSnapshot> {
+        match command.cmd {
+            0x03 => self.x.set_sign(command.value),
+            0x02 => self.x.set_pair(0, command.value),
+            0x01 => self.x.set_pair(1, command.value),
+            0x00 => self.x.set_pair(2, command.value),
+            0x07 => self.z.set_sign(command.value),
+            0x06 => self.z.set_pair(0, command.value),
+            0x05 => self.z.set_pair(1, command.value),
+            0x04 => self.z.set_pair(2, command.value),
+            0x0D => {
+                if is_packed_bcd(command.value) {
+                    self.rpm_pairs[0] = command.value;
+                    self.rpm_mask |= 1 << 0;
+                }
+            }
+            0x0C => {
+                if is_packed_bcd(command.value) {
+                    self.rpm_pairs[1] = command.value;
+                    self.rpm_mask |= 1 << 1;
+                }
+            }
+            _ => {}
+        }
+
+        if command.cmd != 0x0C {
             return None;
         }
 
-        if let Some(snapshot) = self.snapshot(sample_index) {
+        if let Some(snapshot) = self.snapshot(command.index) {
             if self.last_emitted == Some(snapshot) {
                 return None;
             }
@@ -251,32 +293,7 @@ impl FeedbackDecoder {
         }
 
         None
-    }
 
-    fn apply_response(&mut self, cmd: u8, response: u8) {
-        match cmd {
-            0x03 => self.x.set_sign(response),
-            0x02 => self.x.set_pair(0, response),
-            0x01 => self.x.set_pair(1, response),
-            0x00 => self.x.set_pair(2, response),
-            0x07 => self.z.set_sign(response),
-            0x06 => self.z.set_pair(0, response),
-            0x05 => self.z.set_pair(1, response),
-            0x04 => self.z.set_pair(2, response),
-            0x0D => {
-                if is_packed_bcd(response) {
-                    self.rpm_pairs[0] = response;
-                    self.rpm_mask |= 1 << 0;
-                }
-            }
-            0x0C => {
-                if is_packed_bcd(response) {
-                    self.rpm_pairs[1] = response;
-                    self.rpm_mask |= 1 << 1;
-                }
-            }
-            _ => {}
-        }
     }
 
     fn snapshot(&self, sample_index: u64) -> Option<FeedbackSnapshot> {
