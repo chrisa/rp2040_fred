@@ -45,7 +45,7 @@ mov x, osr            side 0b1111 ; prepare to choose r/w
 jmp !x write_cycle    side 0b1111 ; 1 - read 0 - write
 
 read_cycle:
-irq nowait 1          side 0b0111 ; read data
+irq clear 1           side 0b0111 ; read data
 irq wait 3      [1]   side 0b0111 ; wait for clock low
 out pins, 8           side 0b0111 ; (non)zeros to bus
 out pins, 8           side 0b0111 ; zeros to bus
@@ -78,7 +78,7 @@ out pindirs, 8        side 0 ; deassert direction pin and switch bus back to rea
 ; in_pins 0-7
 .program fred_bm_data_read
 .wrap_target
-wait 1 irq 1    ; wait for interrupt from control
+irq wait 1      ; wait for interrupt from control
 in pins, 8      ; read data
-push block      ; push data
+push noblock    ; push data
 .wrap
