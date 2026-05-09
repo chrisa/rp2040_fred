@@ -33,6 +33,7 @@ pub struct Bus<
 > {
     _common: Common<'sm, PIO>,
     _dir_a: Output<'sm>,
+    _dir_c: Output<'sm>,
     _clock: StateMachine<'sm, PIO, SCL>,
     control: StateMachine<'sm, PIO, SC>,
     write: StateMachine<'sm, PIO, SW>,
@@ -84,8 +85,12 @@ impl<'a> ThisBus<'a> {
 
     pub fn setup(pio_resources: PioResources) -> ThisBus<'a> {
         // address data-dir high for output.
-        let mut dir_a = Output::new(pio_resources.pin_26, Level::High);
+        let mut dir_a = Output::new(pio_resources.pin_20, Level::High);
         dir_a.set_high();
+
+        // control data-dir high for output
+        let mut dir_c = Output::new(pio_resources.pin_21, Level::High);
+        dir_c.set_high();
 
         let fred_bm_clock = pio::pio_file!(
             "../pio/bus_master.pio",
@@ -145,8 +150,6 @@ impl<'a> ThisBus<'a> {
         let p17 = pio0.common.make_pio_pin(pio_resources.pin_17);
         let p18 = pio0.common.make_pio_pin(pio_resources.pin_18);
         let p19 = pio0.common.make_pio_pin(pio_resources.pin_19);
-        let p20 = pio0.common.make_pio_pin(pio_resources.pin_20);
-        let p27 = pio0.common.make_pio_pin(pio_resources.pin_27);
 
         let data_bus_pins = [&p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7];
 
@@ -154,16 +157,14 @@ impl<'a> ThisBus<'a> {
 
         let control_pins = [
             &p17, // RnW
-            &p18, // NMI
-            &p19, // IRQ
-            &p20, // FRED
+            &p18, // FRED
         ];
 
         let clock_pins = [
             &p16, // 1MHzE
         ];
 
-        let data_dir_pin = [&p27];
+        let data_dir_pin = [&p19];
 
         clock.set_pin_dirs(Direction::In, &data_bus_pins);
         clock.set_pin_dirs(Direction::Out, &addr_bus_pins);
@@ -244,6 +245,7 @@ impl<'a> ThisBus<'a> {
             write,
             read,
             _dir_a: dir_a,
+            _dir_c: dir_c,
             _common: pio0.common,
         }
     }
