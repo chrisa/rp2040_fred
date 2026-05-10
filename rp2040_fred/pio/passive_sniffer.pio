@@ -4,29 +4,27 @@
 ; Published sample word layout:
 ;   bits [7:0]   -> D0..D7
 ;   bits [15:8]  -> A0..A7
-;   bit 16       -> RnW
-;   bit 17       -> 1MHZE
-;   bit 18       -> unused
-;   bit 19       -> unused
-;   bit 20       -> FRED_N (forced low in emitted samples)
+;   bit 16       -> 1MHZE
+;   bit 17       -> RnW
+;   bit 18       -> FRED_N
 ;
 ; Program waits for FRED_N to assert, then samples on each 1MHZE edge
 ; (rising and falling) so timing can be reconstructed offline.
-; `jmp pin` must be configured to GPIO20/FRED_N.
+; `jmp pin` must be configured to GPIO18/FRED_N.
 
 .program fred_passive_sniffer
 .side_set 1 opt
 
 .wrap_target
 wait_fred:
-    wait 0 gpio 20
+    wait 0 gpio 18
 sample_loop:
-    wait 0 gpio 17 [1]
+    wait 0 gpio 16 [1]
     jmp pin wait_fred
-    wait 1 gpio 17 [1]
+    wait 1 gpio 16 [1]
     jmp pin wait_fred
     mov isr, null side 0 [1]
-    in pins, 18 side 1 [1]
+    in pins, 19 side 1 [1]
     push block side 0
     jmp sample_loop
 .wrap

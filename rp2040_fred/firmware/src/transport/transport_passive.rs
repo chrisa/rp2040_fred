@@ -298,14 +298,15 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
     let in_pins = [
         &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, // data bus
         &p8, &p9, &p10, &p11, &p12, &p13, &p14, &p15, // addr bus
-        &p16, // RnW
-        &p17, // 1MHz
+        &p16, // 1MHzE
+        &p17, // RnW
+        &p18, // FRED
     ];
 
     let mut cfg = Config::default();
     cfg.use_program(&loaded, &[&p28]);
     cfg.set_in_pins(&in_pins);
-    cfg.set_jmp_pin(&p20);
+    cfg.set_jmp_pin(&p18);
     cfg.shift_in = ShiftConfig {
         threshold: 32,
         direction: ShiftDirection::Left,
@@ -353,7 +354,5 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
 
 #[inline]
 fn encode_trace_sample(raw_sample: u32) -> u32 {
-    // The non-consecutive hardware map keeps bus bits on GPIO0..17 and uses
-    // GPIO20 for FRED_N, leaving GPIO18/19 intentionally unused.
     raw_sample
 }
