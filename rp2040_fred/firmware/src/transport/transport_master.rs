@@ -57,7 +57,7 @@ pub struct PioTransport {
 }
 
 impl Transport for PioTransport {
-    fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+    fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
@@ -120,7 +120,7 @@ impl Transport for PioTransport {
             return;
         }
 
-        let mut processed = 0usize;
+        let mut processed = 0_usize;
         while processed < budget {
             let Some(command) = self.commands.dequeue() else {
                 break;
@@ -141,8 +141,8 @@ impl Transport for PioTransport {
 
     fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
         if self.capture_enabled {
-            let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
-            let mut used = 0usize;
+            let mut batch = [0_u32; TRACE_SAMPLES_PER_PACKET];
+            let mut used = 0_usize;
 
             while used < batch.len() {
                 let Some(sample) = self.trace_samples.dequeue() else {
@@ -189,7 +189,7 @@ impl Transport for PioTransport {
                 self.flags(),
             );
             self.packet_seq = self.packet_seq.wrapping_add(1);
-            self.next_telemetry_due_ms = now_ms + self.telemetry_period_ms.max(1) as u64;
+            self.next_telemetry_due_ms = now_ms + u64::from(self.telemetry_period_ms.max(1));
             return Some(pkt);
         }
 
@@ -438,16 +438,16 @@ fn encode_trace_sample(raw_sample: u32) -> u32 {
     raw_sample
 }
 
+const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
+
 #[embassy_executor::task]
 async fn core1_loop(
     pio_resources: PioResources,
     mut commands: Producer<'static, FeedbackCommand>,
 ) -> ! {
     let mut bus = Bus::setup(pio_resources);
-
-    const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
-
     let mut index = 0;
+    
     loop {
         Timer::after(Duration::from_millis(10)).await;
         for cmd in CMD_SEQUENCE {

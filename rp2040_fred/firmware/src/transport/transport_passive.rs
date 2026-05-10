@@ -127,7 +127,7 @@ impl PioTransport {
 }
 
 impl Transport for PioTransport {
-    fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+    fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);

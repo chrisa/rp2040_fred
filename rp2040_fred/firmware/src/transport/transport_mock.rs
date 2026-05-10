@@ -22,7 +22,7 @@ impl MockTransport {
 }
 
 impl Transport for MockTransport {
-    fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+    fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         self.next_due_ms = 0;
         match req.msg_type {
             MsgType::Ping => {

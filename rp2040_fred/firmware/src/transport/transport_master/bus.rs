@@ -47,11 +47,11 @@ impl<'a> ThisBus<'a> {
         self.poll_until(0xF0, 0x01).await;
         self.write_cycle(0x80, cmd).await;
         self.poll_until(0xF0, 0x01).await;
-        self.read_cycle(0xF1).await
+        return self.read_cycle(0xF1).await
     }
 
     pub async fn poll_until(&mut self, addr: u8, mask: u8) {
-        let addr_payload = 0x0001_0000u32 | ((addr as u32) << 24);
+        let addr_payload = 0x0001_0000_u32 | (u32::from(addr) << 24);
         self.read.clear_fifos();
         loop {
             self.control.tx().wait_push(addr_payload).await;
@@ -64,16 +64,16 @@ impl<'a> ThisBus<'a> {
     }
 
     pub async fn write_cycle(&mut self, addr: u8, data: u8) {
-        let data_payload = 0xFF00_0000u32 | ((data as u32) << 16);
-        let addr_payload = (addr as u32) << 24;
+        let data_payload = 0xFF00_0000_u32 | (u32::from(data) << 16);
+        let addr_payload = u32::from(addr) << 24;
         self.write.tx().wait_push(data_payload).await;
         self.control.tx().wait_push(addr_payload).await;
     }
 
     pub async fn read_cycle(&mut self, addr: u8) -> u8 {
-        let addr_payload = 0x0001_0000u32 | ((addr as u32) << 24);
+        let addr_payload = 0x0001_0000_u32 | (u32::from(addr) << 24);
         self.control.tx().wait_push(addr_payload).await;
-        self.read.rx().wait_pull().await as u8
+        return self.read.rx().wait_pull().await as u8
     }
 
     pub fn setup(pio_resources: PioResources) -> ThisBus<'a> {

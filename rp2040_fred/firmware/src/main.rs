@@ -25,7 +25,7 @@ use {defmt_rtt as _, panic_probe as _};
 use crate::resources::{
     AssignedResources, Core1Resources, MainResources, PioResources, UsbResources,
 };
-use crate::transport::Transport;
+use crate::transport::Transport as _;
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<embassy_rp::peripherals::USB>;
@@ -36,10 +36,10 @@ const USB_BACKLOG_POLL_US: u64 = 50;
 const USB_OUTGOING_BURST_PACKETS: usize = 16;
 const USB_DECODE_BURST_SAMPLES: usize = 512;
 
-// fn create_transport(core1_resources: Core1Resources, sniffer_resources: SnifferResources) -> impl Transport {
-
-//     transport
-// }
+defmt::timestamp!("{=u64:us}", {
+    // NOTE(interrupt-safe) single instruction volatile read operation
+    Instant::now().as_micros()
+});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -96,7 +96,7 @@ async fn main(_spawner: Spawner) {
 
     let usb_fut = usb_device.run();
     let bridge_fut = async {
-        let mut rx_buf = [0u8; PACKET_SIZE];
+        let mut rx_buf = [0_u8; PACKET_SIZE];
         let mut replies = [Packet::ping(0), Packet::ping(0)];
 
         loop {
@@ -118,12 +118,9 @@ async fn main(_spawner: Spawner) {
                 {
                     Either::First(Ok(n)) => {
                         if n >= MIN_PACKET_SIZE {
-                            let reply_count = match Packet::decode(&rx_buf[..n]) {
-                                Ok(req) => transport.handle_request(req, &mut replies),
-                                Err(_) => {
-                                    replies[0] = Packet::nack(0, 0xFF, 0x02);
-                                    1
-                                }
+                            let reply_count = if let Ok(req) = Packet::decode(&rx_buf[..n]) { transport.handle_request(&req, &mut replies) } else {
+                                replies[0] = Packet::nack(0, 0xFF, 0x02);
+                                1
                             };
 
                             for pkt in replies.iter().take(reply_count) {
@@ -132,9 +129,8 @@ async fn main(_spawner: Spawner) {
                                 if usb.write_packet(&encoded[..encoded_len]).await.is_err() {
                                     log_warn!("USB write failed; dropping connection");
                                     break 'connected;
-                                } else {
-                                    log_info!("wrote request/response USB packet OK");
                                 }
+                                log_info!("wrote request/response USB packet OK");
                             }
                         }
                     }
