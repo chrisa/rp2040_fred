@@ -6,6 +6,7 @@ use std::io::BufReader;
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use fredctl::transport::{HostTransport, UsbTransport};
+use rp2040_fred_protocol::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN};
 use rp2040_fred_protocol::bridge_proto::Packet;
 use rp2040_fred_protocol::trace_decode::{
     AxisSnapshot, FeedbackDecoder, FeedbackSnapshot, TraceCycle,
@@ -26,7 +27,7 @@ fn main() -> io::Result<()> {
         ("monitor", "usb") => monitor_usb(),
         ("capture-on", "usb") => set_usb_capture(true),
         ("capture-off", "usb") => set_usb_capture(false),
-        ("capture", "usb") => capture_usb(),
+        ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
                 io::Error::new(
@@ -69,7 +70,7 @@ fn print_help() {
     eprintln!("  fredctl monitor usb");
     eprintln!("  fredctl capture-on usb");
     eprintln!("  fredctl capture-off usb");
-    eprintln!("  fredctl capture usb");
+    eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
     eprintln!("  fredctl decode usb");
@@ -114,12 +115,13 @@ fn set_usb_capture(enable: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn capture_usb() -> io::Result<()> {
+fn capture_usb(options: CaptureUsbOptions) -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     let _ = t.transact(Packet::telemetry_set(1, false, 25))?;
     let _ = t.transact(Packet::capture_set(2, true))?;
 
-    print_raw_header();
+    let mut printer = RawSamplePrinter::new(options.raw_print_options());
+    printer.print_header();
     let mut i = 0u64;
     let mut counters = TraceCaptureCounters::default();
 
@@ -138,7 +140,7 @@ fn capture_usb() -> io::Result<()> {
                 }
 
                 for sample in trace.iter_samples() {
-                    print_raw_sample(i, trace.timestamp_us, sample);
+                    printer.print_sample(i, trace.timestamp_us, sample);
                     i = i.wrapping_add(1);
                 }
             }
@@ -206,7 +208,8 @@ fn raw_capture_file(path: &str) -> io::Result<()> {
     let mut counters = TraceCaptureCounters::default();
     let mut sample_index = 0u64;
 
-    print_raw_header();
+    let mut printer = RawSamplePrinter::new(RawPrintOptions::default());
+    printer.print_header();
     while let Some(batch) = reader.read_batch()? {
         if let Some(comment) =
             counters.update(batch.dropped_samples_total, batch.rx_stall_count_total)
@@ -216,7 +219,7 @@ fn raw_capture_file(path: &str) -> io::Result<()> {
 
         let batch_timestamp_us = batch.timestamp_us;
         for sample in batch.samples {
-            print_raw_sample(sample_index, batch_timestamp_us, sample);
+            printer.print_sample(sample_index, batch_timestamp_us, sample);
             sample_index = sample_index.wrapping_add(1);
         }
     }
@@ -250,10 +253,6 @@ fn decode_capture_file(path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn print_raw_header() {
-    println!("step  batch_us          sample      D    A   RnW CLK FREDn");
-}
-
 fn print_monitor_header() {
     println!(
         "{:<step_width$}  {:<axis_width$}  {:<axis_width$}  {:<rpm_width$}",
@@ -277,25 +276,6 @@ fn print_monitor_snapshot(step: usize, snapshot: MonitorSnapshot) {
         step_width = MONITOR_STEP_WIDTH,
         axis_width = MONITOR_AXIS_WIDTH,
         rpm_width = MONITOR_RPM_WIDTH,
-    );
-}
-
-fn print_raw_sample(step: u64, batch_timestamp_us: Option<u64>, sample: u32) {
-    let d = (sample & 0xFF) as u8;
-    let a = ((sample >> 8) & 0xFF) as u8;
-    let rnw = if ((sample >> 16) & 1) as u8 == 0 {
-        "W"
-    } else {
-        "R"
-    };
-    let clk = ((sample >> 17) & 1) as u8;
-    let fred_n = ((sample >> 20) & 1) as u8;
-    let batch_us = batch_timestamp_us
-        .map(|timestamp_us| timestamp_us.to_string())
-        .unwrap_or_else(|| "-".to_string());
-
-    println!(
-        "{step:04}  {batch_us:>16}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
     );
 }
 
@@ -340,5 +320,137 @@ impl TraceCaptureCounters {
         Some(format!(
             "# capture dropped_delta={dropped_delta} dropped_total={dropped_samples_total} rxfifo_block_delta={stall_delta} rxfifo_block_total={rx_stall_count_total}"
         ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CaptureUsbOptions {
+    ignore_fcf0_reads: bool,
+}
+
+impl CaptureUsbOptions {
+    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
+        let mut options = Self::default();
+
+        for arg in args {
+            match arg.as_str() {
+                "--ignore-fcf0-reads" => options.ignore_fcf0_reads = true,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown capture usb option: {arg}"),
+                    ));
+                }
+            }
+        }
+
+        Ok(options)
+    }
+
+    fn raw_print_options(self) -> RawPrintOptions {
+        RawPrintOptions {
+            ignore_fcf0_reads: self.ignore_fcf0_reads,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RawPrintOptions {
+    ignore_fcf0_reads: bool,
+}
+
+struct RawSamplePrinter {
+    options: RawPrintOptions,
+    last_emitted_step: Option<u64>,
+}
+
+impl RawSamplePrinter {
+    fn new(options: RawPrintOptions) -> Self {
+        Self {
+            options,
+            last_emitted_step: None,
+        }
+    }
+
+    fn print_header(&self) {
+        println!("step  delta_us  batch_us          sample      D    A   RnW CLK FREDn");
+    }
+
+    fn print_sample(&mut self, step: u64, batch_timestamp_us: Option<u64>, sample: u32) {
+        if self.options.ignore_fcf0_reads && sample_is_fcf0_read(sample) {
+            return;
+        }
+
+        let d = (sample & 0xFF) as u8;
+        let a = ((sample >> 8) & 0xFF) as u8;
+        let rnw = if ((sample >> READ_WRITE_PIN) & 1) as u8 == 0 {
+            "W"
+        } else {
+            "R"
+        };
+        let clk = ((sample >> ONE_MHZ_PIN) & 1) as u8;
+        let fred_n = ((sample >> FRED_PIN) & 1) as u8;
+        let delta_us = self
+            .last_emitted_step
+            .map(|prev_step| step.wrapping_sub(prev_step).to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let batch_us = batch_timestamp_us
+            .map(|timestamp_us| timestamp_us.to_string())
+            .unwrap_or_else(|| "-".to_string());
+
+        println!(
+            "{step:04}  {delta_us:>8}  {batch_us:>16}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
+        );
+        self.last_emitted_step = Some(step);
+    }
+}
+
+fn sample_is_fcf0_read(sample: u32) -> bool {
+    ((sample >> 8) & 0xFF) as u8 == 0xF0 && ((sample >> READ_WRITE_PIN) & 1) != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::{sample_is_fcf0_read, CaptureUsbOptions, RawPrintOptions, RawSamplePrinter};
+
+    fn sample(data: u8, addr: u8, read: bool) -> u32 {
+        (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | (1 << 17)
+    }
+
+    #[test]
+    fn parses_capture_usb_ignore_fcf0_flag() {
+        let options = CaptureUsbOptions::parse(vec!["--ignore-fcf0-reads".to_string()].into_iter())
+            .expect("options");
+        assert!(options.ignore_fcf0_reads);
+    }
+
+    #[test]
+    fn rejects_unknown_capture_usb_option() {
+        let error = CaptureUsbOptions::parse(vec!["--wat".to_string()].into_iter())
+            .expect_err("unknown option should fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn detects_fcf0_reads_only() {
+        assert!(sample_is_fcf0_read(sample(0xAA, 0xF0, true)));
+        assert!(!sample_is_fcf0_read(sample(0xAA, 0xF0, false)));
+        assert!(!sample_is_fcf0_read(sample(0xAA, 0xF1, true)));
+    }
+
+    #[test]
+    fn raw_printer_tracks_last_emitted_step_after_filtering() {
+        let mut printer = RawSamplePrinter::new(RawPrintOptions {
+            ignore_fcf0_reads: true,
+        });
+        assert_eq!(printer.last_emitted_step, None);
+
+        printer.print_sample(10, Some(1000), sample(0xAA, 0xF0, true));
+        assert_eq!(printer.last_emitted_step, None);
+
+        printer.print_sample(14, Some(1004), sample(0x55, 0x80, false));
+        assert_eq!(printer.last_emitted_step, Some(14));
     }
 }
