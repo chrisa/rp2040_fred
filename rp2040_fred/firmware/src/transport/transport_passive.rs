@@ -16,8 +16,8 @@ use static_cell::StaticCell;
 use crate::resources::{Core1Resources, PioResources};
 use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
-use rp2040_fred_protocol::log_info;
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
+use rp2040_fred_firmware::{log_info, log_warn};
 
 bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -182,9 +182,14 @@ impl Transport for PioTransport {
                 break;
             };
 
-            if let Some(snapshot) = self.decoder.ingest_sample(self.sample_seq, sample) {
-                self.current_snapshot = snapshot;
-                self.snapshot_valid = true;
+            match self.decoder.ingest_sample(self.sample_seq, sample) {
+                Ok(s) => {
+                    self.current_snapshot = s;
+                    self.snapshot_valid = true;
+                },
+                Err(e) => {
+                    // log_warn!("error from ingest_command: {}", e);
+                }
             }
             self.sample_seq = self.sample_seq.wrapping_add(1);
             processed += 1;
@@ -260,8 +265,8 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
     data_dir_d.set_low();
 
     let program = pio::pio_file!(
-        "../pio/passive_pio.pio",
-        select_program("fred_passive_pio"),
+        "../pio/passive_sniffer.pio",
+        select_program("fred_passive_sniffer"),
         options(max_program_size = 32)
     );
 
