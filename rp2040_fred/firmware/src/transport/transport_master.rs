@@ -86,7 +86,7 @@ impl Transport for PioTransport {
                 Ok(s) => {
                     self.current_snapshot = s;
                     self.snapshot_valid = true;
-                },
+                }
                 Err(e) => {
                     // log_warn!("error from ingest_command: {}", e);
                 }

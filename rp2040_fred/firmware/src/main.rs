@@ -157,8 +157,8 @@ async fn main(_spawner: Spawner) {
                     if usb.write_packet(&encoded[..encoded_len]).await.is_err() {
                         log_warn!("USB telemetry write failed; dropping connection");
                         break 'connected;
-                    } else {
-                        // log_info!("wrote data USB packet OK");
+                        // } else {
+                        //     log_info!("wrote data USB packet OK");
                     }
                 }
             }

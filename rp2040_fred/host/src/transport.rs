@@ -111,6 +111,7 @@ impl UsbTransport {
             // Embassy's CMSIS-DAP v2 class appends a zero-length packet after
             // full-size endpoint writes. Skip those framing packets.
             if n == 0 {
+                eprintln!("read zero-length packet");
                 continue;
             }
 

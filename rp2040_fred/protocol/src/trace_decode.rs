@@ -1,3 +1,5 @@
+use crate::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
     pub data: u8,
@@ -7,8 +9,8 @@ pub struct TraceCycle {
 
 impl TraceCycle {
     pub fn from_sample(sample: u32) -> Option<Self> {
-        let clock_high = ((sample >> 17) & 1) != 0;
-        let fred_selected = ((sample >> 20) & 1) == 0;
+        let clock_high = ((sample >> ONE_MHZ_PIN) & 1) != 0;
+        let fred_selected = ((sample >> FRED_PIN) & 1) == 0;
 
         if !clock_high || !fred_selected {
             return None;
@@ -17,7 +19,7 @@ impl TraceCycle {
         Some(Self {
             data: (sample & 0xFF) as u8,
             addr: ((sample >> 8) & 0xFF) as u8,
-            read: ((sample >> 16) & 1) != 0,
+            read: ((sample >> READ_WRITE_PIN) & 1) != 0,
         })
     }
 }
@@ -152,8 +154,7 @@ impl AxisState {
         if is_packed_bcd(response) {
             self.pairs[idx] = response;
             self.pair_mask |= 1 << idx;
-        }
-        else {
+        } else {
             self.pairs[idx] = 0;
             self.pair_mask |= 1 << idx;
         }
@@ -229,7 +230,11 @@ impl FeedbackDecoder {
         }
     }
 
-    pub fn ingest_sample(&mut self, sample_index: u64, sample: u32) -> Result<FeedbackSnapshot, &str> {
+    pub fn ingest_sample(
+        &mut self,
+        sample_index: u64,
+        sample: u32,
+    ) -> Result<FeedbackSnapshot, &str> {
         if let Some(cycle) = TraceCycle::from_sample(sample) {
             return self.ingest_cycle(sample_index, cycle);
         }
@@ -243,18 +248,17 @@ impl FeedbackDecoder {
     ) -> Result<FeedbackSnapshot, &str> {
         if cycle.addr == 0x80 && !cycle.read {
             self.pending_cmd = Some(cycle.data);
-            return Err("");
+            return Err("recorded pending_cmd");
         }
 
         if cycle.addr != 0xF1 || !cycle.read {
-            return Err("");
+            return Err("not 0xF1 / not read");
         }
 
         if let Some(cmd) = self.pending_cmd.take() {
             self.ingest_command(FeedbackCommand::from_bytes(sample_index, cmd, cycle.data))
-        }
-        else {
-            Err("")
+        } else {
+            Err("no pending_cmd")
         }
     }
 
@@ -272,8 +276,7 @@ impl FeedbackDecoder {
                 if is_packed_bcd(command.value) {
                     self.rpm_pairs[0] = command.value;
                     self.rpm_mask |= 1 << 0;
-                }
-                else {
+                } else {
                     self.rpm_pairs[0] = 0;
                     self.rpm_mask |= 1 << 0;
                 }
@@ -282,8 +285,7 @@ impl FeedbackDecoder {
                 if is_packed_bcd(command.value) {
                     self.rpm_pairs[1] = command.value;
                     self.rpm_mask |= 1 << 1;
-                }
-                else {
+                } else {
                     self.rpm_pairs[1] = 0;
                     self.rpm_mask |= 1 << 1;
                 }
@@ -302,13 +304,9 @@ impl FeedbackDecoder {
                 // }
                 // self.last_emitted = Some(snapshot);
                 Ok(snapshot)
-            },
-            Err(error) =>  {
-                Err(error)
             }
+            Err(error) => Err(error),
         }
-        
-
     }
 
     fn snapshot(&self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {

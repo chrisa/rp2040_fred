@@ -6,8 +6,8 @@ use embassy_rp::pio::{
     ShiftDirection, StateMachine,
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
-use rp_pac as pac;
 use rp2040_fred_firmware::log_info;
+use rp_pac as pac;
 
 use crate::resources::PioResources;
 

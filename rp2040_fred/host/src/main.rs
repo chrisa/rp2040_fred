@@ -116,28 +116,35 @@ fn set_usb_capture(enable: bool) -> io::Result<()> {
 
 fn capture_usb() -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let _ = t.transact(Packet::capture_set(1, true))?;
-    let _ = t.transact(Packet::telemetry_set(2, false, 25))?;
+    let _ = t.transact(Packet::telemetry_set(1, false, 25))?;
+    let _ = t.transact(Packet::capture_set(2, true))?;
 
     print_raw_header();
     let mut i = 0u64;
     let mut counters = TraceCaptureCounters::default();
 
     loop {
-        let pkt = t.read_packet()?;
-        let Some(trace) = pkt.decode_trace_samples() else {
-            continue;
-        };
+        match t.read_packet() {
+            Ok(packet) => {
+                let Some(trace) = packet.decode_trace_samples() else {
+                    eprintln!("failed to decode trace samples");
+                    continue;
+                };
 
-        if let Some(comment) =
-            counters.update(trace.dropped_samples_total, trace.rx_stall_count_total)
-        {
-            println!("{comment}");
-        }
+                if let Some(comment) =
+                    counters.update(trace.dropped_samples_total, trace.rx_stall_count_total)
+                {
+                    println!("{comment}");
+                }
 
-        for sample in trace.iter_samples() {
-            print_raw_sample(i, sample);
-            i = i.wrapping_add(1);
+                for sample in trace.iter_samples() {
+                    print_raw_sample(i, sample);
+                    i = i.wrapping_add(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("{}", e);
+            }
         }
     }
 }
