@@ -16,13 +16,8 @@ use static_cell::StaticCell;
 use crate::resources::{Core1Resources, PioResources};
 use crate::transport::Transport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
+use rp2040_fred_protocol::log_info;
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
-
-macro_rules! log_info {
-    ($($arg:tt)*) => {
-        defmt::info!($($arg)*);
-    };
-}
 
 bind_interrupts!(struct PioIrqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;

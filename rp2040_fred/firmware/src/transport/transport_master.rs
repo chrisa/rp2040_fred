@@ -5,6 +5,7 @@ use embassy_rp::multicore::Stack;
 use embassy_time::{Duration, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicU32, Ordering};
+use rp2040_fred_firmware::{log_info, log_warn};
 use static_cell::StaticCell;
 
 use crate::resources::{Core1Resources, PioResources};
@@ -44,6 +45,7 @@ impl Transport for PioTransport {
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
+                log_info!("handled Ping");
                 1
             }
             MsgType::TelemetrySet => {
@@ -58,10 +60,12 @@ impl Transport for PioTransport {
                     }
                     out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
                 }
+                log_info!("handled TelemetrySet -> {}", self.telemetry_enabled);
                 1
             }
             _ => {
                 out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x11);
+                log_warn!("nacked msg_type 0x{:x}", req.msg_type as u8);
                 1
             }
         }
@@ -78,17 +82,30 @@ impl Transport for PioTransport {
                 break;
             };
 
-            if let Some(snapshot) = self.decoder.ingest_command(command) {
-                self.current_snapshot = snapshot;
-                self.snapshot_valid = true;
+            match self.decoder.ingest_command(command) {
+                Ok(s) => {
+                    self.current_snapshot = s;
+                    self.snapshot_valid = true;
+                },
+                Err(e) => {
+                    // log_warn!("error from ingest_command: {}", e);
+                }
             }
             processed += 1;
         }
+
+        // log_info!("processed {} commands", processed);
     }
 
     fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
         if self.telemetry_enabled {
-            if !self.snapshot_valid || now_ms < self.next_telemetry_due_ms {
+            if !self.snapshot_valid {
+                log_warn!("snapshot invalid");
+                return None;
+            }
+
+            if now_ms < self.next_telemetry_due_ms {
+                // log_info!("telemetry not due ({} ms)", self.next_telemetry_due_ms - now_ms);
                 return None;
             }
 
@@ -151,7 +168,7 @@ impl PioTransport {
                 rpm_raw: 0,
             },
             snapshot_valid: false,
-            telemetry_period_ms: 100,
+            telemetry_period_ms: 10,
             next_telemetry_due_ms: 0,
         }
     }
@@ -202,8 +219,8 @@ async fn core1_loop(
 
     let mut index = 0;
     loop {
+        Timer::after(Duration::from_millis(10)).await;
         for cmd in CMD_SEQUENCE {
-            Timer::after(Duration::from_micros(100)).await;
             let value = bus.command_cycle(cmd).await;
             if commands
                 .enqueue(FeedbackCommand::from_bytes(index, cmd, value))
@@ -213,7 +230,5 @@ async fn core1_loop(
             }
             index += 1;
         }
-
-        Timer::after(Duration::from_micros(1000)).await;
     }
 }

@@ -36,7 +36,7 @@ start:
 ;                            ||
 pull block            side 0b11 ; 
 
-irq wait 3            side 0b11 ; wait for PRE-clock high
+irq wait 3            side 0b11 ; wait for clock low
 out pins, 8           side 0b11 ; address to bus
 
 mov x, osr            side 0b11 ; prepare to choose r/w
@@ -56,7 +56,7 @@ out pins, 8           side 0b01 ; zeros to bus
 out pins, 8           side 0b01 ; zeros to bus
 .wrap
 
-; side_set 27
+; side_set 19
 ; out_pins 0-7
 .program fred_bm_data_write
 .side_set 1
@@ -72,11 +72,13 @@ out pins, 8      [3]  side 1 ; deassert data bus; delay to force output to 0v.
 out pindirs, 8        side 0 ; deassert direction pin and switch bus back to read
 .wrap
 
-
+; debug side_set 28
 ; in_pins 0-7
 .program fred_bm_data_read
+.side_set 1
 .wrap_target
-irq wait 1      ; wait for interrupt from control
-in pins, 8      ; read data
-push noblock    ; push data
+irq wait 1            side 0 ; wait for interrupt from control
+irq wait 3            side 0 ; wait for clock low
+in pins, 8            side 1 ; read data
+push block       [4]  side 1 ; push data
 .wrap

@@ -133,7 +133,9 @@ impl UsbTransport {
 
             if n == LEGACY_PACKET_SIZE && raw[1] == LEGACY_PROTOCOL_VERSION {
                 if !self.warned_legacy_packets {
-                    eprintln!("warning: device returned legacy 32-byte packets; likely old firmware/protocol v1");
+                    eprintln!(
+                        "warning: device returned legacy 32-byte packets; likely old firmware/protocol v1"
+                    );
                     self.warned_legacy_packets = true;
                 }
                 return decode_legacy_packet(raw);

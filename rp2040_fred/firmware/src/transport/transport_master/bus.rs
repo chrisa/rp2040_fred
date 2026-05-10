@@ -7,14 +7,9 @@ use embassy_rp::pio::{
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use rp_pac as pac;
+use rp2040_fred_firmware::log_info;
 
 use crate::resources::PioResources;
-
-macro_rules! log_info {
-    ($($arg:tt)*) => {
-        defmt::info!($($arg)*);
-    };
-}
 
 bind_interrupts!(struct Pio0Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -61,7 +56,7 @@ impl<'a> ThisBus<'a> {
         loop {
             self.control.tx().wait_push(addr_payload).await;
             if let Some(r) = self.read.rx().try_pull() {
-                if (r >> 24) as u8 & mask == 0 {
+                if (r as u8) & mask == 0 {
                     break;
                 }
             }
@@ -70,7 +65,6 @@ impl<'a> ThisBus<'a> {
 
     pub async fn write_cycle(&mut self, addr: u8, data: u8) {
         let data_payload = 0xFF00_0000u32 | ((data as u32) << 16);
-        // let addr_payload = 0x0000_0000u32 | ((addr as u32) << 24);
         let addr_payload = (addr as u32) << 24;
         self.write.tx().wait_push(data_payload).await;
         self.control.tx().wait_push(addr_payload).await;
@@ -80,7 +74,6 @@ impl<'a> ThisBus<'a> {
         let addr_payload = 0x0001_0000u32 | ((addr as u32) << 24);
         self.control.tx().wait_push(addr_payload).await;
         self.read.rx().wait_pull().await as u8
-        // self.read.rx().pull() as u8
     }
 
     pub fn setup(pio_resources: PioResources) -> ThisBus<'a> {
@@ -150,6 +143,7 @@ impl<'a> ThisBus<'a> {
         let p17 = pio0.common.make_pio_pin(pio_resources.pin_17);
         let p18 = pio0.common.make_pio_pin(pio_resources.pin_18);
         let p19 = pio0.common.make_pio_pin(pio_resources.pin_19);
+        let p28 = pio0.common.make_pio_pin(pio_resources.pin_28);
 
         let data_bus_pins = [&p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7];
 
@@ -166,11 +160,13 @@ impl<'a> ThisBus<'a> {
 
         let data_dir_pin = [&p19];
 
+        let read_debug_pin = [&p28];
+
         clock.set_pin_dirs(Direction::In, &data_bus_pins);
         clock.set_pin_dirs(Direction::Out, &addr_bus_pins);
         clock.set_pin_dirs(Direction::Out, &data_dir_pin);
+        clock.set_pin_dirs(Direction::Out, &read_debug_pin);
 
-        // setting up control pins for open-drain output
         clock.set_pins(Level::Low, &control_pins);
         clock.set_pin_dirs(Direction::Out, &control_pins);
         clock.set_pins(Level::Low, &clock_pins);
@@ -209,9 +205,9 @@ impl<'a> ThisBus<'a> {
         write.set_config(&write_cfg);
 
         let mut read_cfg = Config::default();
-        read_cfg.use_program(&read_program, &[]);
+        read_cfg.use_program(&read_program, &read_debug_pin);
         read_cfg.set_in_pins(&data_bus_pins);
-        read_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 50_000_000);
+        read_cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 125_000_000);
         read_cfg.shift_in = ShiftConfig {
             threshold: 8,
             direction: ShiftDirection::Left,

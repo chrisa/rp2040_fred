@@ -284,10 +284,7 @@ pub fn pack_trace_sample(sample: u32) -> [u8; TRACE_PACKED_SAMPLE_SIZE] {
 }
 
 pub fn unpack_trace_sample(packed: [u8; TRACE_PACKED_SAMPLE_SIZE]) -> u32 {
-    (packed[0] as u32)
-        | ((packed[1] as u32) << 8)
-        | (((packed[2] as u32) & 0x01) << 16)
-        | (1 << 17)
+    (packed[0] as u32) | ((packed[1] as u32) << 8) | (((packed[2] as u32) & 0x01) << 16) | (1 << 17)
 }
 
 pub fn crc32_ieee(data: &[u8]) -> u32 {

@@ -17,6 +17,7 @@ use embassy_usb::msos;
 use embassy_usb::{Builder, Config as UsbConfig};
 use gpio::{Level, Output};
 use panic_probe as _;
+use rp2040_fred_firmware::{log_info, log_warn};
 use rp2040_fred_protocol::bridge_proto::{Packet, MIN_PACKET_SIZE, PACKET_SIZE};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -26,23 +27,11 @@ use crate::resources::{
 };
 use crate::transport::Transport;
 
-macro_rules! log_info {
-    ($($arg:tt)*) => {
-        defmt::info!($($arg)*);
-    };
-}
-
-macro_rules! log_warn {
-    ($($arg:tt)*) => {
-        defmt::warn!($($arg)*);
-    };
-}
-
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<embassy_rp::peripherals::USB>;
 });
 
-const USB_IDLE_POLL_MS: u64 = 2;
+const USB_IDLE_POLL_MS: u64 = 10;
 const USB_BACKLOG_POLL_US: u64 = 50;
 const USB_OUTGOING_BURST_PACKETS: usize = 16;
 const USB_DECODE_BURST_SAMPLES: usize = 512;
@@ -144,7 +133,7 @@ async fn main(_spawner: Spawner) {
                                     log_warn!("USB write failed; dropping connection");
                                     break 'connected;
                                 } else {
-                                    // log_info!("wrote USB packet OK");
+                                    log_info!("wrote request/response USB packet OK");
                                 }
                             }
                         }
@@ -168,6 +157,8 @@ async fn main(_spawner: Spawner) {
                     if usb.write_packet(&encoded[..encoded_len]).await.is_err() {
                         log_warn!("USB telemetry write failed; dropping connection");
                         break 'connected;
+                    } else {
+                        // log_info!("wrote data USB packet OK");
                     }
                 }
             }

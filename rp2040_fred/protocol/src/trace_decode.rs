@@ -149,11 +149,14 @@ impl AxisState {
     }
 
     fn set_pair(&mut self, idx: usize, response: u8) {
-        if !is_packed_bcd(response) {
-            return;
+        if is_packed_bcd(response) {
+            self.pairs[idx] = response;
+            self.pair_mask |= 1 << idx;
         }
-        self.pairs[idx] = response;
-        self.pair_mask |= 1 << idx;
+        else {
+            self.pairs[idx] = 0;
+            self.pair_mask |= 1 << idx;
+        }
     }
 
     fn snapshot(&self) -> Option<AxisSnapshot> {
@@ -178,9 +181,9 @@ pub fn counts_to_mm(snapshot: DroSnapshot, cal: Calibration) -> (f32, f32, u16) 
 }
 
 pub struct FeedbackCommand {
-    index: u64,
-    cmd: u8,
-    value: u8,
+    pub index: u64,
+    pub cmd: u8,
+    pub value: u8,
 }
 
 impl FeedbackCommand {
@@ -195,7 +198,7 @@ pub struct FeedbackDecoder {
     z: AxisState,
     rpm_pairs: [u8; 2],
     rpm_mask: u8,
-    last_emitted: Option<FeedbackSnapshot>,
+    // last_emitted: Option<FeedbackSnapshot>,
 }
 
 impl Default for FeedbackDecoder {
@@ -222,40 +225,40 @@ impl FeedbackDecoder {
             },
             rpm_pairs: [0; 2],
             rpm_mask: 0,
-            last_emitted: None,
+            // last_emitted: None,
         }
     }
 
-    pub fn ingest_sample(&mut self, sample_index: u64, sample: u32) -> Option<FeedbackSnapshot> {
+    pub fn ingest_sample(&mut self, sample_index: u64, sample: u32) -> Result<FeedbackSnapshot, &str> {
         if let Some(cycle) = TraceCycle::from_sample(sample) {
             return self.ingest_cycle(sample_index, cycle);
         }
-        None
+        Err("None from from_sample")
     }
 
     pub fn ingest_cycle(
         &mut self,
         sample_index: u64,
         cycle: TraceCycle,
-    ) -> Option<FeedbackSnapshot> {
+    ) -> Result<FeedbackSnapshot, &str> {
         if cycle.addr == 0x80 && !cycle.read {
             self.pending_cmd = Some(cycle.data);
-            return None;
+            return Err("");
         }
 
         if cycle.addr != 0xF1 || !cycle.read {
-            return None;
+            return Err("");
         }
 
-        let cmd = self.pending_cmd.take()?;
-
-        self.ingest_command(FeedbackCommand::from_bytes(sample_index, cmd, cycle.data))
+        if let Some(cmd) = self.pending_cmd.take() {
+            self.ingest_command(FeedbackCommand::from_bytes(sample_index, cmd, cycle.data))
+        }
+        else {
+            Err("")
+        }
     }
 
-    pub fn ingest_command(
-        &mut self,
-        command: FeedbackCommand
-    ) -> Option<FeedbackSnapshot> {
+    pub fn ingest_command(&mut self, command: FeedbackCommand) -> Result<FeedbackSnapshot, &str> {
         match command.cmd {
             0x03 => self.x.set_sign(command.value),
             0x02 => self.x.set_pair(0, command.value),
@@ -270,10 +273,18 @@ impl FeedbackDecoder {
                     self.rpm_pairs[0] = command.value;
                     self.rpm_mask |= 1 << 0;
                 }
+                else {
+                    self.rpm_pairs[0] = 0;
+                    self.rpm_mask |= 1 << 0;
+                }
             }
             0x0C => {
                 if is_packed_bcd(command.value) {
                     self.rpm_pairs[1] = command.value;
+                    self.rpm_mask |= 1 << 1;
+                }
+                else {
+                    self.rpm_pairs[1] = 0;
                     self.rpm_mask |= 1 << 1;
                 }
             }
@@ -281,32 +292,46 @@ impl FeedbackDecoder {
         }
 
         if command.cmd != 0x0C {
-            return None;
+            return Err("no 0x0C yet");
         }
 
-        if let Some(snapshot) = self.snapshot(command.index) {
-            if self.last_emitted == Some(snapshot) {
-                return None;
+        match self.snapshot(command.index) {
+            Ok(snapshot) => {
+                // if self.last_emitted == Some(snapshot) {
+                //     return Ok(snapshot);
+                // }
+                // self.last_emitted = Some(snapshot);
+                Ok(snapshot)
+            },
+            Err(error) =>  {
+                Err(error)
             }
-            self.last_emitted = Some(snapshot);
-            return Some(snapshot)
         }
-
-        None
+        
 
     }
 
-    fn snapshot(&self, sample_index: u64) -> Option<FeedbackSnapshot> {
+    fn snapshot(&self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {
         if self.rpm_mask != 0b11 {
-            return None;
+            return Err("incomplete RPM mask");
         }
 
-        let x = self.x.snapshot()?;
-        let z = self.z.snapshot()?;
+        let x = match self.x.snapshot() {
+            Some(x) => x,
+            None => {
+                return Err("no x snapshot");
+            }
+        };
+        let z = match self.z.snapshot() {
+            Some(z) => z,
+            None => {
+                return Err("no z snapshot");
+            }
+        };
         let rpm_raw =
             (bcd_pair_value(self.rpm_pairs[0]) * 100 + bcd_pair_value(self.rpm_pairs[1])) as u16;
 
-        Some(FeedbackSnapshot {
+        Ok(FeedbackSnapshot {
             sample_index,
             x,
             z,

@@ -8,7 +8,7 @@ use crate::transport::{HostTransport, UsbTransport};
 
 const DEFAULT_VID: u16 = 0x2E8A;
 const DEFAULT_PID: u16 = 0x000A;
-const IDLE_READ_TIMEOUT: Duration = Duration::from_millis(1);
+const IDLE_READ_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonitorSnapshot {
@@ -73,7 +73,12 @@ impl FredMonitorClient {
     }
 
     pub fn open(vid: u16, pid: u16) -> io::Result<Self> {
-        Self::open_with_options(vid, pid, Duration::from_millis(250), Calibration::default())
+        Self::open_with_options(
+            vid,
+            pid,
+            Duration::from_millis(1000),
+            Calibration::default(),
+        )
     }
 
     pub fn open_with_options(

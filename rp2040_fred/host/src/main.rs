@@ -4,10 +4,16 @@ use std::io;
 use std::io::BufReader;
 
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
-use fredctl::monitor::FredMonitorClient;
+use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use fredctl::transport::{HostTransport, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::Packet;
-use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot, TraceCycle};
+use rp2040_fred_protocol::trace_decode::{
+    AxisSnapshot, FeedbackDecoder, FeedbackSnapshot, TraceCycle,
+};
+
+const MONITOR_STEP_WIDTH: usize = 10;
+const MONITOR_AXIS_WIDTH: usize = 12;
+const MONITOR_RPM_WIDTH: usize = 6;
 
 fn main() -> io::Result<()> {
     let mut args = env::args().skip(1);
@@ -85,16 +91,13 @@ fn set_usb_telemetry(enable: bool) -> io::Result<()> {
 
 fn monitor_usb() -> io::Result<()> {
     let mut client = FredMonitorClient::open(0x2E8A, 0x000A)?;
-    client.enable_polling(25)?;
-    println!("step  X_mm        Z_mm        RPM");
+    client.enable_polling(10)?;
+    print_monitor_header();
 
     let mut i = 0usize;
     loop {
         let snapshot = client.next_snapshot()?;
-        println!(
-            "{:04}  {:+9.3}   {:+9.3}   {:5}",
-            i, snapshot.x_mm, snapshot.z_mm, snapshot.spindle_rpm
-        );
+        print_monitor_snapshot(i, snapshot);
         i = i.wrapping_add(1);
     }
 }
@@ -165,7 +168,7 @@ fn decode_usb_capture() -> io::Result<()> {
         for sample in trace.iter_samples() {
             let cycle = TraceCycle::from_sample(sample).unwrap();
 
-            if let Some(snapshot) = decoder.ingest_cycle(sample_index, cycle) {
+            if let Ok(snapshot) = decoder.ingest_cycle(sample_index, cycle) {
                 print_decoded_snapshot(snapshot);
             };
             sample_index = sample_index.wrapping_add(1);
@@ -229,7 +232,7 @@ fn decode_capture_file(path: &str) -> io::Result<()> {
         }
 
         for sample in batch.samples {
-            if let Some(snapshot) = decoder.ingest_sample(sample_index, sample) {
+            if let Ok(snapshot) = decoder.ingest_sample(sample_index, sample) {
                 print_decoded_snapshot(snapshot);
             }
             sample_index = sample_index.wrapping_add(1);
@@ -241,6 +244,32 @@ fn decode_capture_file(path: &str) -> io::Result<()> {
 
 fn print_raw_header() {
     println!("step  sample      D    A   RnW CLK FREDn");
+}
+
+fn print_monitor_header() {
+    println!(
+        "{:<step_width$}  {:<axis_width$}  {:<axis_width$}  {:<rpm_width$}",
+        "step",
+        "X_mm",
+        "Z_mm",
+        "RPM",
+        step_width = MONITOR_STEP_WIDTH,
+        axis_width = MONITOR_AXIS_WIDTH,
+        rpm_width = MONITOR_RPM_WIDTH,
+    );
+}
+
+fn print_monitor_snapshot(step: usize, snapshot: MonitorSnapshot) {
+    let x_mm = format!("{:+.3}", snapshot.x_mm);
+    let z_mm = format!("{:+.3}", snapshot.z_mm);
+    let rpm = snapshot.spindle_rpm.to_string();
+
+    println!(
+        "{step:>step_width$}  {x_mm:>axis_width$}  {z_mm:>axis_width$}  {rpm:>rpm_width$}",
+        step_width = MONITOR_STEP_WIDTH,
+        axis_width = MONITOR_AXIS_WIDTH,
+        rpm_width = MONITOR_RPM_WIDTH,
+    );
 }
 
 fn print_raw_sample(step: u64, sample: u32) {
