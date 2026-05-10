@@ -1,16 +1,17 @@
 #![allow(dead_code)]
 
 pub const PACKET_MAGIC: u8 = 0xA5;
-pub const PROTOCOL_VERSION: u8 = 3;
+pub const PROTOCOL_VERSION: u8 = 4;
 pub const HEADER_SIZE: usize = 8;
 pub const CRC_SIZE: usize = 4;
 pub const PAYLOAD_SIZE: usize = 305;
 pub const PACKET_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE + CRC_SIZE;
 pub const MIN_PACKET_SIZE: usize = HEADER_SIZE + CRC_SIZE;
-pub const TRACE_METADATA_SIZE: usize = 8;
+pub const TRACE_METADATA_SIZE: usize = 16;
 pub const TRACE_PACKED_SAMPLE_SIZE: usize = 3;
 pub const TRACE_SAMPLES_PER_PACKET: usize =
     (PAYLOAD_SIZE - TRACE_METADATA_SIZE) / TRACE_PACKED_SAMPLE_SIZE;
+pub const TRACE_TIMESTAMP_UNKNOWN_US: u64 = u64::MAX;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +68,7 @@ pub struct Packet {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceSamples<'a> {
+    pub timestamp_us: Option<u64>,
     pub dropped_samples_total: u32,
     pub rx_stall_count_total: u32,
     sample_bytes: &'a [u8],
@@ -228,6 +230,7 @@ impl Packet {
 
     pub fn trace_samples(
         seq: u16,
+        timestamp_us: Option<u64>,
         dropped_samples_total: u32,
         rx_stall_count_total: u32,
         samples: &[u32],
@@ -235,8 +238,13 @@ impl Packet {
         assert!(samples.len() <= TRACE_SAMPLES_PER_PACKET);
 
         let mut payload = [0u8; PAYLOAD_SIZE];
-        payload[0..4].copy_from_slice(&dropped_samples_total.to_le_bytes());
-        payload[4..8].copy_from_slice(&rx_stall_count_total.to_le_bytes());
+        payload[0..8].copy_from_slice(
+            &timestamp_us
+                .unwrap_or(TRACE_TIMESTAMP_UNKNOWN_US)
+                .to_le_bytes(),
+        );
+        payload[8..12].copy_from_slice(&dropped_samples_total.to_le_bytes());
+        payload[12..16].copy_from_slice(&rx_stall_count_total.to_le_bytes());
         let mut used = TRACE_METADATA_SIZE;
 
         for sample in samples {
@@ -249,7 +257,7 @@ impl Packet {
     }
 
     pub fn trace_sample(seq: u16, sample_bits: u32) -> Self {
-        Self::trace_samples(seq, 0, 0, core::slice::from_ref(&sample_bits))
+        Self::trace_samples(seq, None, 0, 0, core::slice::from_ref(&sample_bits))
     }
 
     pub fn decode_trace_samples(&self) -> Option<TraceSamples<'_>> {
@@ -260,14 +268,20 @@ impl Packet {
         }
 
         let used = self.payload_used();
-        let dropped_samples_total = u32::from_le_bytes([used[0], used[1], used[2], used[3]]);
-        let rx_stall_count_total = u32::from_le_bytes([used[4], used[5], used[6], used[7]]);
+        let raw_timestamp_us = u64::from_le_bytes([
+            used[0], used[1], used[2], used[3], used[4], used[5], used[6], used[7],
+        ]);
+        let timestamp_us =
+            (raw_timestamp_us != TRACE_TIMESTAMP_UNKNOWN_US).then_some(raw_timestamp_us);
+        let dropped_samples_total = u32::from_le_bytes([used[8], used[9], used[10], used[11]]);
+        let rx_stall_count_total = u32::from_le_bytes([used[12], used[13], used[14], used[15]]);
         let sample_bytes = &used[TRACE_METADATA_SIZE..];
         if !sample_bytes.len().is_multiple_of(TRACE_PACKED_SAMPLE_SIZE) {
             return None;
         }
 
         Some(TraceSamples {
+            timestamp_us,
             dropped_samples_total,
             rx_stall_count_total,
             sample_bytes,
@@ -357,6 +371,7 @@ mod tests {
 
         let trace = Packet::trace_samples(
             0x33,
+            Some(123_456),
             7,
             2,
             &[sample(0x04, 0x03, false), sample(0x5A, 0xA5, true)],
@@ -365,8 +380,9 @@ mod tests {
         let trace_got = Packet::decode(&trace_raw[..trace.encoded_len()]).expect("decode trace");
         assert_eq!(trace_got.msg_type, MsgType::TraceSample);
         assert_eq!(trace_got.seq, 0x33);
-        assert_eq!(trace_got.payload_len, 14);
+        assert_eq!(trace_got.payload_len, 22);
         let trace_decoded = trace_got.decode_trace_samples().expect("trace payload");
+        assert_eq!(trace_decoded.timestamp_us, Some(123_456));
         assert_eq!(trace_decoded.dropped_samples_total, 7);
         assert_eq!(trace_decoded.rx_stall_count_total, 2);
         assert_eq!(trace_decoded.sample_count(), 2);

@@ -134,11 +134,13 @@ impl BridgeService {
 
         // Emit one telemetry packet per full DRO command cadence.
         if self.capture_enabled {
+            let samples = frame.sample_words();
             return Some(Packet::trace_samples(
                 self.bus_cycles as u16,
+                Some(self.sample_index.saturating_sub(samples.len() as u64)),
                 0,
                 0,
-                &frame.sample_words(),
+                &samples,
             ));
         }
         if frame.cmd_fc80 == 0x0C {

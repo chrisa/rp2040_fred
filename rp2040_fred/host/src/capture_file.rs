@@ -3,21 +3,24 @@ use std::io::{ErrorKind, Read, Write};
 
 use rp2040_fred_protocol::bridge_proto::{
     pack_trace_sample, unpack_trace_sample, TraceSamples, TRACE_PACKED_SAMPLE_SIZE,
+    TRACE_TIMESTAMP_UNKNOWN_US,
 };
 
 const CAPTURE_MAGIC: [u8; 8] = *b"FREDCAP\0";
-const CAPTURE_VERSION: u32 = 2;
+const CAPTURE_VERSION: u32 = 3;
 const RESERVED: u32 = 0;
 const MAX_BATCH_SAMPLES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CaptureEncoding {
     Raw32,
-    Packed3,
+    Packed3V2,
+    Packed3V3,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureBatch {
+    pub timestamp_us: Option<u64>,
     pub dropped_samples_total: u32,
     pub rx_stall_count_total: u32,
     pub samples: Vec<u32>,
@@ -40,6 +43,12 @@ impl<W: Write> CaptureWriter<W> {
             io::Error::new(ErrorKind::InvalidInput, "too many samples in capture batch")
         })?;
 
+        self.inner.write_all(
+            &trace
+                .timestamp_us
+                .unwrap_or(TRACE_TIMESTAMP_UNKNOWN_US)
+                .to_le_bytes(),
+        )?;
         self.inner
             .write_all(&trace.dropped_samples_total.to_le_bytes())?;
         self.inner
@@ -51,6 +60,7 @@ impl<W: Write> CaptureWriter<W> {
 
     pub fn write_batch(
         &mut self,
+        timestamp_us: Option<u64>,
         dropped_samples_total: u32,
         rx_stall_count_total: u32,
         samples: &[u32],
@@ -59,6 +69,11 @@ impl<W: Write> CaptureWriter<W> {
             io::Error::new(ErrorKind::InvalidInput, "too many samples in capture batch")
         })?;
 
+        self.inner.write_all(
+            &timestamp_us
+                .unwrap_or(TRACE_TIMESTAMP_UNKNOWN_US)
+                .to_le_bytes(),
+        )?;
         self.inner.write_all(&dropped_samples_total.to_le_bytes())?;
         self.inner.write_all(&rx_stall_count_total.to_le_bytes())?;
         self.inner.write_all(&sample_count.to_le_bytes())?;
@@ -88,7 +103,8 @@ impl<R: Read> CaptureReader<R> {
         let version = read_u32(&mut inner)?;
         let encoding = match version {
             1 => CaptureEncoding::Raw32,
-            CAPTURE_VERSION => CaptureEncoding::Packed3,
+            2 => CaptureEncoding::Packed3V2,
+            CAPTURE_VERSION => CaptureEncoding::Packed3V3,
             _ => {
                 return Err(io::Error::new(
                     ErrorKind::InvalidData,
@@ -102,6 +118,15 @@ impl<R: Read> CaptureReader<R> {
     }
 
     pub fn read_batch(&mut self) -> io::Result<Option<CaptureBatch>> {
+        let timestamp_us = match self.encoding {
+            CaptureEncoding::Raw32 | CaptureEncoding::Packed3V2 => None,
+            CaptureEncoding::Packed3V3 => {
+                let Some(raw_timestamp_us) = read_u64_or_eof(&mut self.inner)? else {
+                    return Ok(None);
+                };
+                (raw_timestamp_us != TRACE_TIMESTAMP_UNKNOWN_US).then_some(raw_timestamp_us)
+            }
+        };
         let Some(dropped_samples_total) = read_u32_or_eof(&mut self.inner)? else {
             return Ok(None);
         };
@@ -121,7 +146,7 @@ impl<R: Read> CaptureReader<R> {
                     samples.push(read_u32(&mut self.inner)?);
                 }
             }
-            CaptureEncoding::Packed3 => {
+            CaptureEncoding::Packed3V2 | CaptureEncoding::Packed3V3 => {
                 for _ in 0..sample_count {
                     let mut packed = [0u8; TRACE_PACKED_SAMPLE_SIZE];
                     self.inner.read_exact(&mut packed)?;
@@ -131,6 +156,7 @@ impl<R: Read> CaptureReader<R> {
         }
 
         Ok(Some(CaptureBatch {
+            timestamp_us,
             dropped_samples_total,
             rx_stall_count_total,
             samples,
@@ -164,9 +190,31 @@ fn read_u32_or_eof<R: Read>(inner: &mut R) -> io::Result<Option<u32>> {
     Ok(Some(u32::from_le_bytes(buf)))
 }
 
+fn read_u64_or_eof<R: Read>(inner: &mut R) -> io::Result<Option<u64>> {
+    let mut buf = [0u8; 8];
+    let mut filled = 0usize;
+
+    while filled < buf.len() {
+        match inner.read(&mut buf[filled..])? {
+            0 if filled == 0 => return Ok(None),
+            0 => {
+                return Err(io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "truncated capture batch timestamp",
+                ));
+            }
+            n => filled += n,
+        }
+    }
+
+    Ok(Some(u64::from_le_bytes(buf)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    use rp2040_fred_protocol::bridge_proto::pack_trace_sample;
 
     use super::{CaptureReader, CaptureWriter, CAPTURE_MAGIC};
 
@@ -176,18 +224,27 @@ mod tests {
         {
             let mut writer = CaptureWriter::new(&mut bytes).expect("writer");
             writer
-                .write_batch(12, 3, &[0x0003_8003, 0x0003_F132, 0x0003_8002])
+                .write_batch(
+                    Some(123_456),
+                    12,
+                    3,
+                    &[0x0003_8003, 0x0003_F132, 0x0003_8002],
+                )
                 .expect("batch 1");
-            writer.write_batch(19, 4, &[0x0003_F107]).expect("batch 2");
+            writer
+                .write_batch(Some(234_567), 19, 4, &[0x0003_F107])
+                .expect("batch 2");
         }
 
         let mut reader = CaptureReader::new(Cursor::new(bytes)).expect("reader");
         let batch1 = reader.read_batch().expect("read 1").expect("batch 1");
+        assert_eq!(batch1.timestamp_us, Some(123_456));
         assert_eq!(batch1.dropped_samples_total, 12);
         assert_eq!(batch1.rx_stall_count_total, 3);
         assert_eq!(batch1.samples.len(), 3);
 
         let batch2 = reader.read_batch().expect("read 2").expect("batch 2");
+        assert_eq!(batch2.timestamp_us, Some(234_567));
         assert_eq!(batch2.dropped_samples_total, 19);
         assert_eq!(batch2.rx_stall_count_total, 4);
         assert_eq!(batch2.samples, vec![0x0003_F107]);
@@ -209,6 +266,28 @@ mod tests {
 
         let mut reader = CaptureReader::new(Cursor::new(bytes)).expect("reader");
         let batch = reader.read_batch().expect("read").expect("batch");
+        assert_eq!(batch.timestamp_us, None);
+        assert_eq!(batch.dropped_samples_total, 12);
+        assert_eq!(batch.rx_stall_count_total, 3);
+        assert_eq!(batch.samples, vec![0x0003_8003, 0x0003_F132]);
+        assert!(reader.read_batch().expect("eof").is_none());
+    }
+
+    #[test]
+    fn reads_legacy_packed3_capture_batches_without_timestamps() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&CAPTURE_MAGIC);
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&12u32.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&pack_trace_sample(0x0003_8003));
+        bytes.extend_from_slice(&pack_trace_sample(0x0003_F132));
+
+        let mut reader = CaptureReader::new(Cursor::new(bytes)).expect("reader");
+        let batch = reader.read_batch().expect("read").expect("batch");
+        assert_eq!(batch.timestamp_us, None);
         assert_eq!(batch.dropped_samples_total, 12);
         assert_eq!(batch.rx_stall_count_total, 3);
         assert_eq!(batch.samples, vec![0x0003_8003, 0x0003_F132]);

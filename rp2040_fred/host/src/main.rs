@@ -138,7 +138,7 @@ fn capture_usb() -> io::Result<()> {
                 }
 
                 for sample in trace.iter_samples() {
-                    print_raw_sample(i, sample);
+                    print_raw_sample(i, trace.timestamp_us, sample);
                     i = i.wrapping_add(1);
                 }
             }
@@ -214,8 +214,9 @@ fn raw_capture_file(path: &str) -> io::Result<()> {
             println!("{comment}");
         }
 
+        let batch_timestamp_us = batch.timestamp_us;
         for sample in batch.samples {
-            print_raw_sample(sample_index, sample);
+            print_raw_sample(sample_index, batch_timestamp_us, sample);
             sample_index = sample_index.wrapping_add(1);
         }
     }
@@ -250,7 +251,7 @@ fn decode_capture_file(path: &str) -> io::Result<()> {
 }
 
 fn print_raw_header() {
-    println!("step  sample      D    A   RnW CLK FREDn");
+    println!("step  batch_us          sample      D    A   RnW CLK FREDn");
 }
 
 fn print_monitor_header() {
@@ -279,7 +280,7 @@ fn print_monitor_snapshot(step: usize, snapshot: MonitorSnapshot) {
     );
 }
 
-fn print_raw_sample(step: u64, sample: u32) {
+fn print_raw_sample(step: u64, batch_timestamp_us: Option<u64>, sample: u32) {
     let d = (sample & 0xFF) as u8;
     let a = ((sample >> 8) & 0xFF) as u8;
     let rnw = if ((sample >> 16) & 1) as u8 == 0 {
@@ -289,10 +290,12 @@ fn print_raw_sample(step: u64, sample: u32) {
     };
     let clk = ((sample >> 17) & 1) as u8;
     let fred_n = ((sample >> 20) & 1) as u8;
+    let batch_us = batch_timestamp_us
+        .map(|timestamp_us| timestamp_us.to_string())
+        .unwrap_or_else(|| "-".to_string());
 
     println!(
-        "{:04}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
-        step
+        "{step:04}  {batch_us:>16}  0x{sample:08X}  {d:02X}  {a:02X}   {rnw}   {clk}    {fred_n}",
     );
 }
 

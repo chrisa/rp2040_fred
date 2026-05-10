@@ -9,6 +9,7 @@ use embassy_rp::pio::{
     Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
+use embassy_time::Instant;
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
@@ -229,8 +230,10 @@ impl Transport for PioTransport {
 
             let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
             let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
+            let timestamp_us = Instant::now().as_micros();
             let pkt = Packet::trace_samples(
                 self.packet_seq,
+                Some(timestamp_us),
                 dropped_samples_total,
                 rx_stall_count_total,
                 &batch[..used],

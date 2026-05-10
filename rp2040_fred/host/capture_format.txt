@@ -4,10 +4,11 @@ All fields are little-endian.
 
 File header:
 - 8 bytes: magic `FREDCAP\0`
-- u32: format version (`2`)
+- u32: format version (`3`)
 - u32: reserved (`0`)
 
 Then zero or more capture batches:
+- u64: `timestamp_us`
 - u32: `dropped_samples_total`
 - u32: `rx_stall_count_total`
 - u32: `sample_count`
@@ -21,6 +22,10 @@ Packed trace sample layout:
 When replayed by the host, each packed sample is reconstructed as a raw capture word
 with `1MHZE=1` and `FRED_N=0`.
 
+`timestamp_us` is the device-side `Instant::now().as_micros()` value captured when
+the firmware emitted the USB trace packet for that batch. It is a batch timestamp,
+not a per-sample edge timestamp.
+
 `dropped_samples_total` is an absolute software-ring drop counter copied from the
 firmware at the time each USB trace packet was emitted.
 
@@ -31,5 +36,6 @@ sample-loss count. Because the PIO runs at 20 MHz while the sampled bus is
 1 MHz, a brief block event may clear before the next bus edge and therefore may
 not correspond to an actually lost capture sample.
 
-The reader also accepts legacy version `1` capture files, which stored each
-sample as a raw little-endian `u32`.
+The reader also accepts legacy version `2` capture files, which used the same
+packed 3-byte sample format without `timestamp_us`, and version `1` capture
+files, which stored each sample as a raw little-endian `u32`.

@@ -350,9 +350,13 @@ fn bcd_pair_value(byte: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{counts_to_mm, Calibration, DroSnapshot, FeedbackDecoder, TraceCycle};
+    use crate::{ONE_MHZ_PIN, READ_WRITE_PIN};
 
     fn sample(data: u8, addr: u8, read: bool, clock_high: bool) -> u32 {
-        (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | ((clock_high as u32) << 17)
+        (data as u32)
+            | ((addr as u32) << 8)
+            | ((read as u32) << READ_WRITE_PIN)
+            | ((clock_high as u32) << ONE_MHZ_PIN)
     }
 
     #[test]
@@ -383,7 +387,9 @@ mod tests {
         let mut emitted = None;
         for (i, (cmd, response)) in seq.into_iter().enumerate() {
             let _ = decoder.ingest_sample(i as u64 * 2, sample(cmd, 0x80, false, true));
-            emitted = decoder.ingest_sample(i as u64 * 2 + 1, sample(response, 0xF1, true, true));
+            emitted = decoder
+                .ingest_sample(i as u64 * 2 + 1, sample(response, 0xF1, true, true))
+                .ok();
         }
 
         let snapshot = emitted.expect("snapshot");
