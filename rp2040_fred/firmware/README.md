@@ -16,6 +16,7 @@ Current Behavior
 - `../protocol/src/protocol.rs` implements `FC80 -> (FCF0, FCF1)` logic for the DRO command cadence.
 - `src/main.rs` runs USB packet IO and delegates transport behavior.
 - `src/transport_mock.rs` handles mock bridge requests/events.
+- `src/transport_master.rs` handles active bus-master operation and streams `TRACE_SAMPLE` packets via `PIO1` while `PIO0` keeps driving the bus.
 - `src/transport_pio.rs` handles passive PIO capture requests/events and `TRACE_SAMPLE` streaming.
 - `../pio/passive_sniffer.pio` captures GPIO0..17 on each 1MHZE edge while GPIO20/`FRED_N` is asserted, keeping trace bits 18 and 19 empty so the published sample layout matches the non-consecutive hardware pin map.
 - `pio-real` wiring matches the `non-consec` branch:
@@ -27,8 +28,8 @@ Current Behavior
   - `GPIO27 = DATA_DIR`
   - `GPIO28 = DATA_OE_N`
 - `CAPTURE_SET` controls mode:
-  - enabled (`1`): passive trace streaming.
-  - disabled (`0`): non-capture request handling (mock telemetry path today).
+  - enabled (`1`): trace streaming.
+  - disabled (`0`): telemetry / DRO request handling.
 
 Build
 - Default mock check:
@@ -60,7 +61,7 @@ Next Wiring Tasks (`pio-real`)
 1. Confirm sampled bit mapping against logic analyzer captures.
 2. Verify sustained capture throughput for expected FRED transaction bursts.
 3. Add host-side binary trace logging for offline decode/timing analysis.
-4. Add active bus-master mode back in once pin rework is complete.
+4. Validate the bus-master capture sampler against the logic analyzer while commands are active.
 
 Notes
-- `pio-real` is currently passive-only; it does not drive the external bus.
+- `PIO1` is used as a passive sampler during bus-master operation; it does not drive the external bus.

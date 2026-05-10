@@ -27,7 +27,7 @@ Notes
 - Z display uses direct axis counts.
 - Mock telemetry emits one packet per full 10-command DRO cadence.
 - Default USB target is `VID=0x2E8A`, `PID=0x000A`, with the first bulk IN/OUT interface discovered at runtime.
-- Firmware now powers up in passive capture mode; `monitor usb` automatically disables capture and enables DRO telemetry.
+- Firmware capture mode is supported alongside bus-master mode; `monitor usb` automatically disables capture and enables DRO telemetry.
 - Conversion constants currently default to:
   - `x_counts_per_mm = 100`
   - `z_counts_per_mm = 100`
