@@ -259,10 +259,12 @@ impl Transport for PioTransport {
 }
 
 fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'static, u32>) -> ! {
-    let mut data_dir_a = Output::new(pio_resources.pin_26, Level::Low);
-    let mut data_dir_d = Output::new(pio_resources.pin_27, Level::Low);
-    data_dir_a.set_low();
+    let mut data_dir_d = Output::new(pio_resources.pin_19, Level::Low);
+    let mut data_dir_a = Output::new(pio_resources.pin_20, Level::Low);
+    let mut data_dir_c = Output::new(pio_resources.pin_21, Level::Low);
     data_dir_d.set_low();
+    data_dir_a.set_low();
+    data_dir_c.set_low();
 
     let program = pio::pio_file!(
         "../pio/passive_sniffer.pio",
