@@ -294,7 +294,7 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
     let p15 = pio.common.make_pio_pin(pio_resources.pin_15);
     let p16 = pio.common.make_pio_pin(pio_resources.pin_16);
     let p17 = pio.common.make_pio_pin(pio_resources.pin_17);
-    let p20 = pio.common.make_pio_pin(pio_resources.pin_20);
+    let p18 = pio.common.make_pio_pin(pio_resources.pin_18);
     let p28 = pio.common.make_pio_pin(pio_resources.pin_28);
 
     let in_pins = [
