@@ -9,12 +9,15 @@ mod transport;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_futures::select::{select, Either};
+use embassy_rp::peripherals::{PIO0, PIO1};
+use embassy_rp::pio::InterruptHandler;
 use embassy_rp::{bind_interrupts, usb};
 use embassy_rp::{clocks::ClockConfig, gpio};
 use embassy_time::{Duration, Instant, Timer};
 use embassy_usb::class::cmsis_dap_v2::{CmsisDapV2Class, State as CmsisState};
 use embassy_usb::msos;
 use embassy_usb::{Builder, Config as UsbConfig};
+
 use gpio::{Level, Output};
 use panic_probe as _;
 use rp2040_fred_firmware::{log_info, log_warn};
@@ -25,7 +28,7 @@ use {defmt_rtt as _, panic_probe as _};
 use crate::resources::{
     AssignedResources, Core1Resources, MainResources, PioResources, UsbResources,
 };
-use crate::transport::Transport as _;
+use crate::transport::{GenericTransport as _, Transport};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<embassy_rp::peripherals::USB>;
@@ -41,23 +44,34 @@ defmt::timestamp!("{=u64:us}", {
     Instant::now().as_micros()
 });
 
+bind_interrupts!(pub struct PioIrqs {
+    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    PIO1_IRQ_0 => InterruptHandler<PIO1>;
+});
+
+#[allow(dead_code)]
+enum TransportMode {
+    Mock,
+    Passive,
+    Master,
+}
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let clock_config = ClockConfig::system_freq(125_000_000).expect("set clock failed?");
     let config = embassy_rp::config::Config::new(clock_config);
     let p = embassy_rp::init(config);
     let r = split_resources!(p);
+    let mode = TransportMode::Master;
 
-    let mut transport = cfg_select! {
-         feature = "mock-bus" => {
-            transport::transport_mock::MockTransport::new()
-         },
-         feature = "pio-passive" => {
-            transport::transport_passive::PioTransport::new(r.core1, r.pio)
-         },
-         feature = "pio-master" => {
-            transport::transport_master::PioTransport::new(r.core1, r.pio)
-         }
+    let mut transport: Transport = match mode {
+        TransportMode::Mock => Transport::Mock(transport::mock::MockTransport::new()),
+        TransportMode::Passive => {
+            Transport::Passive(transport::passive::PassiveTransport::new(r.core1, r.pio))
+        }
+        TransportMode::Master => {
+            Transport::Master(transport::master::BusMasterTransport::new(r.core1, r.pio))
+        }
     };
 
     let mut led = Output::new(r.main.led, Level::Low);
@@ -118,7 +132,9 @@ async fn main(_spawner: Spawner) {
                 {
                     Either::First(Ok(n)) => {
                         if n >= MIN_PACKET_SIZE {
-                            let reply_count = if let Ok(req) = Packet::decode(&rx_buf[..n]) { transport.handle_request(&req, &mut replies) } else {
+                            let reply_count = if let Ok(req) = Packet::decode(&rx_buf[..n]) {
+                                transport.handle_request(&req, &mut replies)
+                            } else {
                                 replies[0] = Packet::nack(0, 0xFF, 0x02);
                                 1
                             };

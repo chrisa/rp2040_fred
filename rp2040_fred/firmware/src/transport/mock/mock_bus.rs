@@ -28,8 +28,8 @@ impl MockBusFrame {
     pub fn sample_words(&self) -> [u32; 2] {
         let b = self.sample_bytes();
         [
-            (0u32 << 24) | (b[2] as u32) << 16 | (b[1] as u32) << 8 | b[0] as u32,
-            (0u32 << 24) | (b[5] as u32) << 16 | (b[4] as u32) << 8 | b[3] as u32,
+            ((b[2] as u32) << 16) | (b[1] as u32) << 8 | b[0] as u32,
+            ((b[5] as u32) << 16) | (b[4] as u32) << 8 | b[3] as u32,
         ]
     }
 }

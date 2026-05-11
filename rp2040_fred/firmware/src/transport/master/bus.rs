@@ -1,22 +1,14 @@
-use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{
-    Common, Config, Direction, Instance, InterruptHandler, Pio, PioBatch, ShiftConfig,
-    ShiftDirection, StateMachine,
+    Common, Config, Direction, Instance, Pio, PioBatch, ShiftConfig, ShiftDirection, StateMachine,
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use rp2040_fred_firmware::log_info;
 use rp_pac as pac;
 
 use crate::resources::PioResources;
-
-bind_interrupts!(struct Pio0Irqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
-});
-// bind_interrupts!(struct Pio1Irqs {
-//     PIO1_IRQ_0 => InterruptHandler<PIO1>;
-// });
+use crate::PioIrqs;
 
 pub struct Bus<
     'sm,
@@ -47,7 +39,7 @@ impl<'a> ThisBus<'a> {
         self.poll_until(0xF0, 0x01).await;
         self.write_cycle(0x80, cmd).await;
         self.poll_until(0xF0, 0x01).await;
-        return self.read_cycle(0xF1).await
+        return self.read_cycle(0xF1).await;
     }
 
     pub async fn poll_until(&mut self, addr: u8, mask: u8) {
@@ -72,8 +64,9 @@ impl<'a> ThisBus<'a> {
 
     pub async fn read_cycle(&mut self, addr: u8) -> u8 {
         let addr_payload = 0x0001_0000_u32 | (u32::from(addr) << 24);
+        self.read.clear_fifos();
         self.control.tx().wait_push(addr_payload).await;
-        return self.read.rx().wait_pull().await as u8
+        return self.read.rx().wait_pull().await as u8;
     }
 
     pub fn setup(pio_resources: PioResources) -> ThisBus<'a> {
@@ -109,7 +102,7 @@ impl<'a> ThisBus<'a> {
             options(max_program_size = 32)
         );
 
-        let mut pio0 = Pio::new(pio_resources.pio0, Pio0Irqs);
+        let mut pio0 = Pio::new(pio_resources.pio0, PioIrqs);
 
         let mut clock = pio0.sm0;
         let mut control = pio0.sm1;

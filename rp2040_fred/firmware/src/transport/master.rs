@@ -1,12 +1,8 @@
 use core::ptr::addr_of_mut;
 
 use embassy_executor::Executor;
-use embassy_rp::bind_interrupts;
 use embassy_rp::multicore::Stack;
-use embassy_rp::peripherals::PIO1;
-use embassy_rp::pio::{
-    Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
-};
+use embassy_rp::pio::{Config, Direction, Pio, PioBatch, ShiftConfig, ShiftDirection};
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
@@ -15,7 +11,8 @@ use rp2040_fred_firmware::{log_info, log_warn};
 use static_cell::StaticCell;
 
 use crate::resources::{Core1Resources, PioResources};
-use crate::transport::Transport;
+use crate::transport::GenericTransport;
+use crate::PioIrqs;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 use rp2040_fred_protocol::trace_decode::{
     AxisSnapshot, FeedbackCommand, FeedbackDecoder, FeedbackSnapshot,
@@ -23,10 +20,6 @@ use rp2040_fred_protocol::trace_decode::{
 
 mod bus;
 use bus::Bus;
-
-bind_interrupts!(struct Pio1Irqs {
-    PIO1_IRQ_0 => InterruptHandler<PIO1>;
-});
 
 const FLAG_ENABLED: u8 = 1 << 0;
 
@@ -43,7 +36,7 @@ static COMMAND_RING: StaticCell<Queue<FeedbackCommand, COMMAND_RING_LEN>> = Stat
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
-pub struct PioTransport {
+pub struct BusMasterTransport {
     trace_samples: Consumer<'static, u32>,
     commands: Consumer<'static, FeedbackCommand>,
     capture_enabled: bool,
@@ -56,7 +49,7 @@ pub struct PioTransport {
     next_telemetry_due_ms: u64,
 }
 
-impl Transport for PioTransport {
+impl GenericTransport for BusMasterTransport {
     fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
@@ -208,7 +201,7 @@ impl Transport for PioTransport {
     }
 }
 
-impl PioTransport {
+impl BusMasterTransport {
     pub fn new(core1_resources: Core1Resources, pio_resources: PioResources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (trace_producer, trace_consumer) = trace_ring.split();
@@ -352,7 +345,7 @@ async fn capture_core1_loop(
         options(max_program_size = 32)
     );
 
-    let mut pio = Pio::new(pio_resources.pio1, Pio1Irqs);
+    let mut pio = Pio::new(pio_resources.pio1, PioIrqs);
     let loaded = pio.common.load_program(&program.program);
 
     let p0 = pio.common.make_pio_pin(pio_resources.pin_0);
@@ -410,14 +403,13 @@ async fn capture_core1_loop(
 
     loop {
         let mut drained = false;
-        while let Some(raw_sample) = pio.sm0.rx().try_pull() {
+        while let Some(sample) = pio.sm0.rx().try_pull() {
             drained = true;
 
             if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
                 continue;
             }
 
-            let sample = encode_trace_sample(raw_sample);
             if trace_samples.enqueue(sample).is_err() {
                 TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
             }
@@ -433,11 +425,6 @@ async fn capture_core1_loop(
     }
 }
 
-#[inline]
-fn encode_trace_sample(raw_sample: u32) -> u32 {
-    raw_sample
-}
-
 const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
 
 #[embassy_executor::task]
@@ -447,7 +434,7 @@ async fn core1_loop(
 ) -> ! {
     let mut bus = Bus::setup(pio_resources);
     let mut index = 0;
-    
+
     loop {
         Timer::after(Duration::from_millis(10)).await;
         for cmd in CMD_SEQUENCE {

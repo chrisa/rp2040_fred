@@ -1,4 +1,4 @@
-use crate::transport::Transport;
+use crate::transport::GenericTransport;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 
 mod bridge_service;
@@ -21,7 +21,7 @@ impl MockTransport {
     }
 }
 
-impl Transport for MockTransport {
+impl GenericTransport for MockTransport {
     fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         self.next_due_ms = 0;
         match req.msg_type {

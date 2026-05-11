@@ -1,13 +1,9 @@
 use core::hint::spin_loop;
 use core::ptr::addr_of_mut;
 
-use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::multicore::{spawn_core1, Stack};
-use embassy_rp::peripherals::PIO0;
-use embassy_rp::pio::{
-    Config, Direction, InterruptHandler, Pio, PioBatch, ShiftConfig, ShiftDirection,
-};
+use embassy_rp::pio::{Config, Direction, Pio, PioBatch, ShiftConfig, ShiftDirection};
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use embassy_time::Instant;
 use heapless::spsc::{Consumer, Producer, Queue};
@@ -15,14 +11,11 @@ use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
 use crate::resources::{Core1Resources, PioResources};
-use crate::transport::Transport;
+use crate::transport::GenericTransport;
+use crate::PioIrqs;
 use rp2040_fred_firmware::{log_info, log_warn};
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
-
-bind_interrupts!(struct PioIrqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
-});
 
 const FLAG_ENABLED: u8 = 1 << 0;
 
@@ -35,7 +28,7 @@ static TRACE_RXSTALL_COUNT: AtomicU32 = AtomicU32::new(0);
 static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 
-pub struct PioTransport {
+pub struct PassiveTransport {
     trace_samples: Consumer<'static, u32>,
     capture_enabled: bool,
     telemetry_enabled: bool,
@@ -48,7 +41,7 @@ pub struct PioTransport {
     next_telemetry_due_ms: u64,
 }
 
-impl PioTransport {
+impl PassiveTransport {
     pub fn new(core1_resources: Core1Resources, pio_resources: PioResources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
@@ -126,7 +119,7 @@ impl PioTransport {
     }
 }
 
-impl Transport for PioTransport {
+impl GenericTransport for PassiveTransport {
     fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
@@ -200,7 +193,7 @@ impl Transport for PioTransport {
                     self.current_snapshot = s;
                     self.snapshot_valid = true;
                 }
-                Err(e) => {
+                Err(_e) => {
                     // log_warn!("error from ingest_sample: {}", e);
                 }
             }
@@ -348,14 +341,13 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
 
     loop {
         let mut drained = false;
-        while let Some(raw_sample) = pio.sm2.rx().try_pull() {
+        while let Some(sample) = pio.sm2.rx().try_pull() {
             drained = true;
 
             if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
                 continue;
             }
 
-            let sample = encode_trace_sample(raw_sample);
             if trace_samples.enqueue(sample).is_err() {
                 TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
             }
@@ -369,9 +361,4 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
             spin_loop();
         }
     }
-}
-
-#[inline]
-fn encode_trace_sample(raw_sample: u32) -> u32 {
-    raw_sample
 }

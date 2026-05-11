@@ -43,7 +43,7 @@ impl BridgeService {
         }
     }
 
-    pub fn handle_request(&mut self, req: Packet, out: &mut [Packet; 2]) -> usize {
+    pub fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
@@ -120,7 +120,7 @@ impl BridgeService {
             },
         );
         self.sample_index = self.sample_index.wrapping_add(1);
-        if let Some(decoded) = self.decoder.ingest_cycle(
+        if let Ok(decoded) = self.decoder.ingest_cycle(
             self.sample_index,
             TraceCycle {
                 data: frame.response_fcf1,

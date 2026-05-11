@@ -4,10 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["defmt-log","pio-master"]
-mock-bus = []
-pio-passive = []
-pio-master = []
+default = ["defmt-log"]
 defmt-log = [
   "dep:defmt",
   "dep:defmt-rtt",
@@ -19,6 +16,7 @@ defmt-log = [
 
 [dependencies]
 assign-resources = "0.5.0"
+enum_dispatch = "0.3.13"
 rp2040-fred-protocol = { path = "../protocol" }
 
 [target.'cfg(target_arch = "arm")'.dependencies]
@@ -50,7 +48,3 @@ opt-level = 3
 debug = 1
 codegen-units = 1
 lto = true
-
-[lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-#restriction = { level = "warn", priority = -2 }
