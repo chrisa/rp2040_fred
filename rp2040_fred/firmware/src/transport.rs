@@ -2,6 +2,8 @@ pub mod master;
 pub mod mock;
 pub mod passive;
 
+mod pio;
+
 use enum_dispatch::enum_dispatch;
 use rp2040_fred_protocol::bridge_proto::Packet;
 

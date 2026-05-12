@@ -30,13 +30,17 @@ assign_resources! {
         pin_16: PIN_16,
         pin_17: PIN_17,
         pin_18: PIN_18,
+    }
+    dir: DirectionResources {
         pin_19: PIN_19,
         pin_20: PIN_20,
         pin_21: PIN_21,
-        pin_22: PIN_22,
-        pin_26: PIN_26,
-        pin_27: PIN_27,
-        pin_28: PIN_28,
+    }
+    debug27: DebugPin27Resources {
+        pin: PIN_27,
+    }
+    debug28: DebugPin28Resources {
+        pin: PIN_28,
     }
     main: MainResources {
         led: PIN_25,

@@ -26,7 +26,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use crate::resources::{
-    AssignedResources, Core1Resources, MainResources, PioResources, UsbResources,
+    AssignedResources, Core1Resources, MainResources, PioResources, UsbResources, DirectionResources, DebugPin27Resources, DebugPin28Resources,
 };
 use crate::transport::{GenericTransport as _, Transport};
 
@@ -67,10 +67,10 @@ async fn main(_spawner: Spawner) {
     let mut transport: Transport = match mode {
         TransportMode::Mock => Transport::Mock(transport::mock::MockTransport::new()),
         TransportMode::Passive => {
-            Transport::Passive(transport::passive::PassiveTransport::new(r.core1, r.pio))
+            Transport::Passive(transport::passive::PassiveTransport::new(r.core1, r.pio, r.dir, r.debug27))
         }
         TransportMode::Master => {
-            Transport::Master(transport::master::BusMasterTransport::new(r.core1, r.pio))
+            Transport::Master(transport::master::BusMasterTransport::new(r.core1, r.pio, r.dir, r.debug27, r.debug28))
         }
     };
 

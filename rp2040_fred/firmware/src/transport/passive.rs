@@ -3,16 +3,14 @@ use core::ptr::addr_of_mut;
 
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::multicore::{spawn_core1, Stack};
-use embassy_rp::pio::{Config, Direction, Pio, PioBatch, ShiftConfig, ShiftDirection};
-use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use embassy_time::Instant;
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
-use crate::resources::{Core1Resources, PioResources};
+use crate::resources::{Core1Resources, DebugPin27Resources, DirectionResources, PioResources};
 use crate::transport::GenericTransport;
-use crate::PioIrqs;
+use crate::transport::pio::passive::PassivePio;
 use rp2040_fred_firmware::{log_info, log_warn};
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
@@ -42,7 +40,7 @@ pub struct PassiveTransport {
 }
 
 impl PassiveTransport {
-    pub fn new(core1_resources: Core1Resources, pio_resources: PioResources) -> Self {
+    pub fn new(core1_resources: Core1Resources, pio_resources: PioResources, dir_resources: DirectionResources, debug_resources: DebugPin27Resources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
 
@@ -53,7 +51,7 @@ impl PassiveTransport {
         spawn_core1(
             core1_resources.core1,
             unsafe { &mut *addr_of_mut!(CORE1_STACK) },
-            move || capture_core1_loop(pio_resources, producer),
+            move || capture_core1_loop(pio_resources, dir_resources, debug_resources, producer),
         );
 
         Self {
@@ -268,80 +266,19 @@ impl GenericTransport for PassiveTransport {
     }
 }
 
-fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'static, u32>) -> ! {
-    let mut data_dir_d = Output::new(pio_resources.pin_19, Level::Low);
-    let mut data_dir_a = Output::new(pio_resources.pin_20, Level::Low);
-    let mut data_dir_c = Output::new(pio_resources.pin_21, Level::Low);
+fn capture_core1_loop(pio_resources: PioResources, dir_resources: DirectionResources, debug_resources: DebugPin27Resources, mut trace_samples: Producer<'static, u32>) -> ! {
+    let mut data_dir_d = Output::new(dir_resources.pin_19, Level::Low);
+    let mut data_dir_a = Output::new(dir_resources.pin_20, Level::Low);
+    let mut data_dir_c = Output::new(dir_resources.pin_21, Level::Low);
     data_dir_d.set_low();
     data_dir_a.set_low();
     data_dir_c.set_low();
 
-    let program = pio::pio_file!(
-        "../pio/passive_sniffer.pio",
-        select_program("fred_passive_sniffer"),
-        options(max_program_size = 32)
-    );
-
-    let mut pio = Pio::new(pio_resources.pio0, PioIrqs);
-
-    let loaded = pio.common.load_program(&program.program);
-
-    let p0 = pio.common.make_pio_pin(pio_resources.pin_0);
-    let p1 = pio.common.make_pio_pin(pio_resources.pin_1);
-    let p2 = pio.common.make_pio_pin(pio_resources.pin_2);
-    let p3 = pio.common.make_pio_pin(pio_resources.pin_3);
-    let p4 = pio.common.make_pio_pin(pio_resources.pin_4);
-    let p5 = pio.common.make_pio_pin(pio_resources.pin_5);
-    let p6 = pio.common.make_pio_pin(pio_resources.pin_6);
-    let p7 = pio.common.make_pio_pin(pio_resources.pin_7);
-    let p8 = pio.common.make_pio_pin(pio_resources.pin_8);
-    let p9 = pio.common.make_pio_pin(pio_resources.pin_9);
-    let p10 = pio.common.make_pio_pin(pio_resources.pin_10);
-    let p11 = pio.common.make_pio_pin(pio_resources.pin_11);
-    let p12 = pio.common.make_pio_pin(pio_resources.pin_12);
-    let p13 = pio.common.make_pio_pin(pio_resources.pin_13);
-    let p14 = pio.common.make_pio_pin(pio_resources.pin_14);
-    let p15 = pio.common.make_pio_pin(pio_resources.pin_15);
-    let p16 = pio.common.make_pio_pin(pio_resources.pin_16);
-    let p17 = pio.common.make_pio_pin(pio_resources.pin_17);
-    let p18 = pio.common.make_pio_pin(pio_resources.pin_18);
-    let p28 = pio.common.make_pio_pin(pio_resources.pin_28);
-
-    let in_pins = [
-        &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, // data bus
-        &p8, &p9, &p10, &p11, &p12, &p13, &p14, &p15, // addr bus
-        &p16, // 1MHzE
-        &p17, // RnW
-        &p18, // FRED
-    ];
-
-    let mut cfg = Config::default();
-    cfg.use_program(&loaded, &[&p28]);
-    cfg.set_in_pins(&in_pins);
-    cfg.set_jmp_pin(&p18);
-    cfg.shift_in = ShiftConfig {
-        threshold: 32,
-        direction: ShiftDirection::Left,
-        auto_fill: false,
-    };
-    cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
-
-    pio.sm2.set_config(&cfg);
-    pio.sm2.set_pin_dirs(Direction::In, &in_pins);
-    pio.sm2.set_pin_dirs(Direction::Out, &[&p28]);
-    pio.sm2.clear_fifos();
-
-    let mut batch = PioBatch::new();
-    batch.restart(&mut pio.sm2);
-    batch.set_enable(&mut pio.sm2, true);
-    batch.execute();
-
-    let _ = pio.sm2.rx().stalled();
-    log_info!("PIO initialised on core1");
+    let mut pio = PassivePio::setup(pio_resources, debug_resources.pin);
 
     loop {
         let mut drained = false;
-        while let Some(sample) = pio.sm2.rx().try_pull() {
+        while let Some(sample) = pio.read.rx().try_pull() {
             drained = true;
 
             if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
@@ -353,7 +290,7 @@ fn capture_core1_loop(pio_resources: PioResources, mut trace_samples: Producer<'
             }
         }
 
-        if pio.sm2.rx().stalled() {
+        if pio.read.rx().stalled() {
             TRACE_RXSTALL_COUNT.fetch_add(1, Ordering::Relaxed);
         }
 

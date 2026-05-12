@@ -1,18 +1,18 @@
 use core::ptr::addr_of_mut;
 
 use embassy_executor::Executor;
+use embassy_rp::gpio::{Level, Output};
 use embassy_rp::multicore::Stack;
-use embassy_rp::pio::{Config, Direction, Pio, PioBatch, ShiftConfig, ShiftDirection};
-use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use rp2040_fred_firmware::{log_info, log_warn};
 use static_cell::StaticCell;
 
-use crate::resources::{Core1Resources, PioResources};
+use crate::resources::{Core1Resources, DebugPin27Resources, DebugPin28Resources, DirectionResources, PioResources};
 use crate::transport::GenericTransport;
-use crate::PioIrqs;
+use crate::transport::pio::master::ThisMasterPio;
+use crate::transport::pio::passive::PassivePio;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 use rp2040_fred_protocol::trace_decode::{
     AxisSnapshot, FeedbackCommand, FeedbackDecoder, FeedbackSnapshot,
@@ -202,7 +202,7 @@ impl GenericTransport for BusMasterTransport {
 }
 
 impl BusMasterTransport {
-    pub fn new(core1_resources: Core1Resources, pio_resources: PioResources) -> Self {
+    pub fn new(core1_resources: Core1Resources, pio_resources: PioResources, dir_resources: DirectionResources, debug27_resources: DebugPin27Resources, debug28_resources: DebugPin28Resources) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (trace_producer, trace_consumer) = trace_ring.split();
 
@@ -223,10 +223,10 @@ impl BusMasterTransport {
                 let executor1 = EXECUTOR1.init(Executor::new());
                 executor1.run(|spawner| {
                     spawner.spawn(
-                        core1_loop(pio_resources, command_producer).expect("spawn core1_loop"),
+                        core1_loop(pio_resources, dir_resources, debug28_resources, command_producer).expect("spawn core1_loop"),
                     );
                     spawner.spawn(
-                        capture_core1_loop(capture_pio_resources, trace_producer)
+                        capture_core1_loop(capture_pio_resources, debug27_resources, trace_producer)
                             .expect("spawn capture_core1_loop"),
                     );
                 })
@@ -324,86 +324,21 @@ unsafe fn clone_capture_resources(pio_resources: &PioResources) -> PioResources 
         pin_16: pio_resources.pin_16.clone_unchecked(),
         pin_17: pio_resources.pin_17.clone_unchecked(),
         pin_18: pio_resources.pin_18.clone_unchecked(),
-        pin_19: pio_resources.pin_19.clone_unchecked(),
-        pin_20: pio_resources.pin_20.clone_unchecked(),
-        pin_21: pio_resources.pin_21.clone_unchecked(),
-        pin_22: pio_resources.pin_22.clone_unchecked(),
-        pin_26: pio_resources.pin_26.clone_unchecked(),
-        pin_27: pio_resources.pin_27.clone_unchecked(),
-        pin_28: pio_resources.pin_28.clone_unchecked(),
     }
 }
 
 #[embassy_executor::task]
 async fn capture_core1_loop(
     pio_resources: PioResources,
+    debug_resources: DebugPin27Resources,
     mut trace_samples: Producer<'static, u32>,
 ) -> ! {
-    let program = pio::pio_file!(
-        "../pio/passive_sniffer.pio",
-        select_program("fred_passive_sniffer"),
-        options(max_program_size = 32)
-    );
 
-    let mut pio = Pio::new(pio_resources.pio1, PioIrqs);
-    let loaded = pio.common.load_program(&program.program);
-
-    let p0 = pio.common.make_pio_pin(pio_resources.pin_0);
-    let p1 = pio.common.make_pio_pin(pio_resources.pin_1);
-    let p2 = pio.common.make_pio_pin(pio_resources.pin_2);
-    let p3 = pio.common.make_pio_pin(pio_resources.pin_3);
-    let p4 = pio.common.make_pio_pin(pio_resources.pin_4);
-    let p5 = pio.common.make_pio_pin(pio_resources.pin_5);
-    let p6 = pio.common.make_pio_pin(pio_resources.pin_6);
-    let p7 = pio.common.make_pio_pin(pio_resources.pin_7);
-    let p8 = pio.common.make_pio_pin(pio_resources.pin_8);
-    let p9 = pio.common.make_pio_pin(pio_resources.pin_9);
-    let p10 = pio.common.make_pio_pin(pio_resources.pin_10);
-    let p11 = pio.common.make_pio_pin(pio_resources.pin_11);
-    let p12 = pio.common.make_pio_pin(pio_resources.pin_12);
-    let p13 = pio.common.make_pio_pin(pio_resources.pin_13);
-    let p14 = pio.common.make_pio_pin(pio_resources.pin_14);
-    let p15 = pio.common.make_pio_pin(pio_resources.pin_15);
-    let p16 = pio.common.make_pio_pin(pio_resources.pin_16);
-    let p17 = pio.common.make_pio_pin(pio_resources.pin_17);
-    let p18 = pio.common.make_pio_pin(pio_resources.pin_18);
-    let p27 = pio.common.make_pio_pin(pio_resources.pin_27);
-
-    let in_pins = [
-        &p0, &p1, &p2, &p3, &p4, &p5, &p6, &p7, // data bus
-        &p8, &p9, &p10, &p11, &p12, &p13, &p14, &p15, // addr bus
-        &p16, // 1MHzE
-        &p17, // RnW
-        &p18, // FRED
-    ];
-
-    let mut cfg = Config::default();
-    cfg.use_program(&loaded, &[&p27]);
-    cfg.set_in_pins(&in_pins);
-    cfg.set_jmp_pin(&p18);
-    cfg.shift_in = ShiftConfig {
-        threshold: 32,
-        direction: ShiftDirection::Left,
-        auto_fill: false,
-    };
-    cfg.clock_divider = calculate_pio_clock_divider_value(125_000_000, 20_000_000);
-
-    pio.sm0.set_config(&cfg);
-    pio.sm0.set_pin_dirs(Direction::In, &in_pins);
-    pio.sm0.set_pin_dirs(Direction::Out, &[&p27]);
-    pio.sm0.clear_fifos();
-
-    let mut batch = PioBatch::new();
-    batch.restart(&mut pio.sm0);
-    batch.set_enable(&mut pio.sm0, true);
-    batch.execute();
-
-    let _ = pio.sm0.rx().stalled();
-    log_info!("PIO1 capture initialised on core1");
+    let mut pio = PassivePio::setup(pio_resources, debug_resources.pin);
 
     loop {
         let mut drained = false;
-        while let Some(sample) = pio.sm0.rx().try_pull() {
+        while let Some(sample) = pio.read.rx().try_pull() {
             drained = true;
 
             if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
@@ -415,7 +350,7 @@ async fn capture_core1_loop(
             }
         }
 
-        if pio.sm0.rx().stalled() {
+        if pio.read.rx().stalled() {
             TRACE_RXSTALL_COUNT.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -430,10 +365,21 @@ const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 
 #[embassy_executor::task]
 async fn core1_loop(
     pio_resources: PioResources,
+    dir_resources: DirectionResources,
+    debug_resources: DebugPin28Resources,
     mut commands: Producer<'static, FeedbackCommand>,
 ) -> ! {
-    let mut bus = Bus::setup(pio_resources);
+    let pio = ThisMasterPio::setup(pio_resources, dir_resources.pin_19, debug_resources.pin);
+    let mut bus = Bus { pio };
     let mut index = 0;
+
+    // address data-dir high for output.
+    let mut dir_a = Output::new(dir_resources.pin_20, Level::High);
+    dir_a.set_high();
+
+    // control data-dir high for output
+    let mut dir_c = Output::new(dir_resources.pin_21, Level::High);
+    dir_c.set_high();
 
     loop {
         Timer::after(Duration::from_millis(10)).await;
