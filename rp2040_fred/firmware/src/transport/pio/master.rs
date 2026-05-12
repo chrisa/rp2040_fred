@@ -6,7 +6,6 @@ use embassy_rp::pio::{
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
 use rp2040_fred_firmware::log_info;
-use rp_pac as pac;
 
 use crate::resources::PioResources;
 use crate::PioIrqs;
@@ -172,13 +171,6 @@ impl<'a> ThisMasterPio<'a> {
         batch.restart(&mut read);
         batch.set_enable(&mut read, true);
         batch.execute();
-
-        [16, 17, 18, 19, 20].iter().for_each(|n| {
-            pac::PADS_BANK0.gpio(*n).modify(|w| {
-                w.set_pue(true); // pull-up enable
-                w.set_pde(false); // pull-down disable
-            });
-        });
 
         log_info!("PIO initialised on core1");
 
