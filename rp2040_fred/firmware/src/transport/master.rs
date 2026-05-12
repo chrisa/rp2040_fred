@@ -337,25 +337,18 @@ async fn capture_core1_loop(
     let mut pio = PassivePio::setup(pio_resources, debug_resources.pin);
 
     loop {
-        let mut drained = false;
-        while let Some(sample) = pio.read.rx().try_pull() {
-            drained = true;
-
-            if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
-                continue;
-            }
-
-            if trace_samples.enqueue(sample).is_err() {
-                TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
+        if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_micros(1)).await;
+            continue;
         }
 
+        let sample = pio.read.rx().wait_pull().await;
+
+        if trace_samples.enqueue(sample).is_err() {
+            TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
         if pio.read.rx().stalled() {
             TRACE_RXSTALL_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
-
-        if !drained {
-            Timer::after(Duration::from_micros(1)).await;
         }
     }
 }
