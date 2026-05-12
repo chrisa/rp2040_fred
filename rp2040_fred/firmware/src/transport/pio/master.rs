@@ -1,10 +1,11 @@
-use embassy_rp::Peri;
 use embassy_rp::gpio::Level;
 use embassy_rp::peripherals::{PIN_19, PIO1};
 use embassy_rp::pio::{
-    Common, Config, Direction, Instance, Pio, PioBatch, PioPin, ShiftConfig, ShiftDirection, StateMachine
+    Common, Config, Direction, Instance, Pio, PioBatch, PioPin, ShiftConfig, ShiftDirection,
+    StateMachine,
 };
 use embassy_rp::pio_programs::clock_divider::calculate_pio_clock_divider_value;
+use embassy_rp::Peri;
 use rp2040_fred_firmware::log_info;
 
 use crate::resources::PioResources;
@@ -29,8 +30,11 @@ pub struct MasterPio<
 pub type ThisMasterPio<'a> = MasterPio<'a, PIO1, 0, 1, 2, 3>;
 
 impl<'a> ThisMasterPio<'a> {
-    pub fn setup(pio_resources: PioResources, pin_19: Peri<'a, PIN_19>, debug_pin: Peri<'a, impl PioPin + 'a>) -> ThisMasterPio<'a> {
-
+    pub fn setup(
+        pio_resources: PioResources,
+        pin_19: Peri<'a, PIN_19>,
+        debug_pin: Peri<'a, impl PioPin + 'a>,
+    ) -> ThisMasterPio<'a> {
         let fred_bm_clock = pio::pio_file!(
             "../pio/bus_master.pio",
             select_program("fred_bm_clock"),

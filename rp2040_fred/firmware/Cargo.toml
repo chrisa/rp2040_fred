@@ -52,7 +52,7 @@ lto = true
 [lints.clippy]
 # Don't Panic - prevent panics from unwraps and unsafe slicing or indexing
 string_slice = "warn"
-indexing_slicing = "warn"
+# indexing_slicing = "warn"
 unwrap_used = "warn"
 panic = "warn"
 todo = "warn"

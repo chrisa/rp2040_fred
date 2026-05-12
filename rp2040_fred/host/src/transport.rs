@@ -79,7 +79,9 @@ impl UsbTransport {
             };
 
             let handle = device.open().map_err(io_other)?;
-            let _ = handle.set_auto_detach_kernel_driver(true);
+            handle
+                .set_auto_detach_kernel_driver(true)
+                .map_err(|_e| io::Error::new(io::ErrorKind::Unsupported, "auto detach"))?;
             handle.claim_interface(if_num).map_err(io_other)?;
 
             return Ok(Self {

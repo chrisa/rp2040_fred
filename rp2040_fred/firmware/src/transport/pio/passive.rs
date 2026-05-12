@@ -1,12 +1,16 @@
-use embassy_rp::{Peri, peripherals::PIO0, pio::{Common, Config, Direction, Instance, Pio, PioBatch, PioPin, ShiftConfig, ShiftDirection, StateMachine}, pio_programs::clock_divider::calculate_pio_clock_divider_value};
+use embassy_rp::{
+    peripherals::PIO0,
+    pio::{
+        Common, Config, Direction, Instance, Pio, PioBatch, PioPin, ShiftConfig, ShiftDirection,
+        StateMachine,
+    },
+    pio_programs::clock_divider::calculate_pio_clock_divider_value,
+    Peri,
+};
 
-use crate::{PioIrqs, resources::PioResources};
+use crate::{resources::PioResources, PioIrqs};
 
-pub struct PassivePio<
-    'sm,
-    PIO: Instance,
-    const SR: usize,
-> {
+pub struct PassivePio<'sm, PIO: Instance, const SR: usize> {
     _common: Common<'sm, PIO>,
     pub read: StateMachine<'sm, PIO, SR>,
 }
@@ -14,9 +18,10 @@ pub struct PassivePio<
 pub type ThisPassivePio<'a> = PassivePio<'a, PIO0, 0>;
 
 impl<'a> ThisPassivePio<'a> {
-
-    pub fn setup(pio_resources: PioResources, debug_pin: Peri<'a, impl PioPin + 'a>) -> ThisPassivePio<'a> {
-
+    pub fn setup(
+        pio_resources: PioResources,
+        debug_pin: Peri<'a, impl PioPin + 'a>,
+    ) -> ThisPassivePio<'a> {
         let program = pio::pio_file!(
             "../pio/passive_sniffer.pio",
             select_program("fred_passive_sniffer"),
@@ -84,7 +89,5 @@ impl<'a> ThisPassivePio<'a> {
             read: pio.sm0,
             _common: pio.common,
         }
-
     }
-
 }

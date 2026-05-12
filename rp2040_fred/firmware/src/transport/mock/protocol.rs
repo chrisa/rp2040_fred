@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 #[derive(Clone, Copy, Debug)]
 pub struct DroTelemetry {
     pub x_counts: i32,
@@ -40,6 +38,7 @@ impl DroProtocolEngine {
         }
     }
 
+    #[expect(clippy::cast_sign_loss, reason = "just creating an rpm number")]
     pub fn step_telemetry(&mut self) {
         self.tick = self.tick.wrapping_add(1);
 

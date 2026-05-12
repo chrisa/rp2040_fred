@@ -39,7 +39,7 @@ impl<W: Write> CaptureWriter<W> {
     }
 
     pub fn write_trace(&mut self, trace: TraceSamples<'_>) -> io::Result<()> {
-        let sample_count = u32::try_from(trace.sample_count()).map_err(|_| {
+        let sample_count = u32::try_from(trace.sample_count()).map_err(|_err| {
             io::Error::new(ErrorKind::InvalidInput, "too many samples in capture batch")
         })?;
 
@@ -65,7 +65,7 @@ impl<W: Write> CaptureWriter<W> {
         rx_stall_count_total: u32,
         samples: &[u32],
     ) -> io::Result<()> {
-        let sample_count = u32::try_from(samples.len()).map_err(|_| {
+        let sample_count = u32::try_from(samples.len()).map_err(|_err| {
             io::Error::new(ErrorKind::InvalidInput, "too many samples in capture batch")
         })?;
 

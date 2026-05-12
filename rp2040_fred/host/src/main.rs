@@ -6,11 +6,11 @@ use std::io::BufReader;
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use fredctl::transport::{HostTransport, UsbTransport};
-use rp2040_fred_protocol::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN};
 use rp2040_fred_protocol::bridge_proto::Packet;
 use rp2040_fred_protocol::trace_decode::{
     AxisSnapshot, FeedbackDecoder, FeedbackSnapshot, TraceCycle,
 };
+use rp2040_fred_protocol::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN};
 
 const MONITOR_STEP_WIDTH: usize = 10;
 const MONITOR_AXIS_WIDTH: usize = 12;
@@ -175,12 +175,14 @@ fn decode_usb_capture() -> io::Result<()> {
         }
 
         for sample in trace.iter_samples() {
-            let cycle = TraceCycle::from_sample(sample).unwrap();
-
-            if let Ok(snapshot) = decoder.ingest_cycle(sample_index, cycle) {
-                print_decoded_snapshot(snapshot);
-            };
-            sample_index = sample_index.wrapping_add(1);
+            if let Some(cycle) = TraceCycle::from_sample(sample) {
+                if let Ok(snapshot) = decoder.ingest_cycle(sample_index, cycle) {
+                    print_decoded_snapshot(snapshot);
+                };
+                sample_index = sample_index.wrapping_add(1);
+            } else {
+                eprintln!("ignoring bad sample");
+            }
         }
     }
 }

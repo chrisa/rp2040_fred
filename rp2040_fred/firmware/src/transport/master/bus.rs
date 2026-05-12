@@ -1,11 +1,10 @@
 use crate::transport::pio::master::ThisMasterPio;
 
 pub struct Bus<'a> {
-    pub pio: ThisMasterPio<'a>
+    pub pio: ThisMasterPio<'a>,
 }
 
 impl<'a> Bus<'a> {
-
     pub async fn command_cycle(&mut self, cmd: u8) -> u8 {
         // 1. Poll `F0` until bit 0 clears.
         // 2. Write one command byte to `80`.
@@ -43,5 +42,4 @@ impl<'a> Bus<'a> {
         self.pio.control.tx().wait_push(addr_payload).await;
         return self.pio.read.rx().wait_pull().await as u8;
     }
-
 }

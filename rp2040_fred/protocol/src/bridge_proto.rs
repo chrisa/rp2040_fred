@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub const PACKET_MAGIC: u8 = 0xA5;
 pub const PROTOCOL_VERSION: u8 = 4;
 pub const HEADER_SIZE: usize = 8;

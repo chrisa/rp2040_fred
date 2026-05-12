@@ -90,7 +90,7 @@ impl AxisDigits {
 
 impl core::fmt::Display for AxisDigits {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let s = core::str::from_utf8(&self.bytes).map_err(|_| core::fmt::Error)?;
+        let s = core::str::from_utf8(&self.bytes).map_err(|_err| core::fmt::Error)?;
         f.write_str(s)
     }
 }

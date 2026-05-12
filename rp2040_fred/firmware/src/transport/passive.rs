@@ -9,8 +9,8 @@ use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
 use crate::resources::{Core1Resources, DebugPin27Resources, DirectionResources, PioResources};
-use crate::transport::GenericTransport;
 use crate::transport::pio::passive::PassivePio;
+use crate::transport::GenericTransport;
 use rp2040_fred_firmware::{log_info, log_warn};
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
@@ -41,7 +41,12 @@ pub struct PassiveTransport {
 }
 
 impl PassiveTransport {
-    pub fn new(core1_resources: Core1Resources, pio_resources: PioResources, dir_resources: DirectionResources, debug_resources: DebugPin27Resources) -> Self {
+    pub fn new(
+        core1_resources: Core1Resources,
+        pio_resources: PioResources,
+        dir_resources: DirectionResources,
+        debug_resources: DebugPin27Resources,
+    ) -> Self {
         let trace_ring = TRACE_SAMPLE_RING.init(Queue::new());
         let (producer, consumer) = trace_ring.split();
 
@@ -49,19 +54,22 @@ impl PassiveTransport {
         TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
         TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
 
-        embassy_rp::multicore::spawn_core1(
-            core1_resources.core1,
-            unsafe { &mut *addr_of_mut!(CORE1_STACK) },
-            move || {
-                let executor1 = EXECUTOR1.init(Executor::new());
-                executor1.run(|spawner| {
-                    spawner.spawn(
-                        capture_core1_loop(pio_resources, dir_resources, debug_resources, producer)
-                            .expect("spawn capture_core1_loop"),
-                    );
-                })
-            },
-        );
+        // SAFETY: standard core1 stack init pattern
+        #[expect(
+            clippy::multiple_unsafe_ops_per_block,
+            reason = "standard pattern, can't move out of CORE1_STACK"
+        )]
+        let stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
+
+        embassy_rp::multicore::spawn_core1(core1_resources.core1, stack, move || {
+            let executor1 = EXECUTOR1.init(Executor::new());
+            executor1.run(|spawner| {
+                spawner.spawn(
+                    capture_core1_loop(pio_resources, dir_resources, debug_resources, producer)
+                        .expect("spawn capture_core1_loop"),
+                );
+            })
+        });
 
         Self {
             trace_samples: consumer,
@@ -276,7 +284,12 @@ impl GenericTransport for PassiveTransport {
 }
 
 #[embassy_executor::task]
-async fn capture_core1_loop(pio_resources: PioResources, dir_resources: DirectionResources, debug_resources: DebugPin27Resources, mut trace_samples: Producer<'static, u32>) -> ! {
+async fn capture_core1_loop(
+    pio_resources: PioResources,
+    dir_resources: DirectionResources,
+    debug_resources: DebugPin27Resources,
+    mut trace_samples: Producer<'static, u32>,
+) -> ! {
     let mut data_dir_d = Output::new(dir_resources.pin_19, Level::Low);
     let mut data_dir_a = Output::new(dir_resources.pin_20, Level::Low);
     let mut data_dir_c = Output::new(dir_resources.pin_21, Level::Low);

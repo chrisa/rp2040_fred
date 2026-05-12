@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::mock_bus::MockBusRunner;
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 use rp2040_fred_protocol::trace_decode::{DroSnapshot, FeedbackDecoder, TraceCycle};
@@ -13,8 +11,6 @@ pub struct BridgeService {
     tick: u32,
     telemetry_seq: u16,
     bus_cycles: u32,
-    tx_timeout_count: u32,
-    rx_timeout_count: u32,
     mock: MockBusRunner,
     decoder: FeedbackDecoder,
     sample_index: u64,
@@ -30,8 +26,6 @@ impl BridgeService {
             tick: 0,
             telemetry_seq: 1,
             bus_cycles: 0,
-            tx_timeout_count: 0,
-            rx_timeout_count: 0,
             mock: MockBusRunner::new(),
             decoder: FeedbackDecoder::new(),
             sample_index: 0,
@@ -75,27 +69,6 @@ impl BridgeService {
                 out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
                 1
             }
-            // MsgType::SnapshotReq => {
-            //     if self.telemetry_enabled {
-            //         out[0] = Packet::telemetry(
-            //             req.seq,
-            //             self.tick,
-            //             self.snapshot().x_counts,
-            //             self.snapshot().z_counts,
-            //             self.snapshot().rpm,
-            //             self.flags(),
-            //         );
-            //         out[1] = Packet::ack(req.seq, MsgType::SnapshotReq, 0);
-            //         return 2;
-            //     }
-            //     if self.capture_enabled {
-            //         out[0] = Packet::trace_sample(req.seq, sample_bits);
-            //         out[1] = Packet::ack(req.seq, MsgType::SnapshotReq, 0);
-            //         return 2;
-            //     }
-            //     out[0] = Packet::nack(req.seq, req.msg_type as u8, 0xFE);
-            //     1
-            // }
             _ => {
                 out[0] = Packet::nack(req.seq, req.msg_type as u8, 0xFE);
                 1
@@ -111,14 +84,16 @@ impl BridgeService {
         let frame = self.mock.step();
         self.tick = self.tick.wrapping_add(1);
         self.bus_cycles = self.bus_cycles.wrapping_add(1);
-        let _ = self.decoder.ingest_cycle(
-            self.sample_index,
-            TraceCycle {
-                data: frame.cmd_fc80,
-                addr: 0x80,
-                read: false,
-            },
-        );
+        self.decoder
+            .ingest_cycle(
+                self.sample_index,
+                TraceCycle {
+                    data: frame.cmd_fc80,
+                    addr: 0x80,
+                    read: false,
+                },
+            )
+            .expect_err("0x80 not accepted");
         self.sample_index = self.sample_index.wrapping_add(1);
         if let Ok(decoded) = self.decoder.ingest_cycle(
             self.sample_index,
@@ -160,17 +135,6 @@ impl BridgeService {
         }
 
         None
-    }
-
-    pub fn health_packet(&mut self) -> Packet {
-        let pkt = Packet::health(
-            self.telemetry_seq,
-            self.tx_timeout_count,
-            self.rx_timeout_count,
-            self.bus_cycles,
-        );
-        self.telemetry_seq = self.telemetry_seq.wrapping_add(1);
-        pkt
     }
 
     pub fn telemetry_period_ms(&self) -> u16 {

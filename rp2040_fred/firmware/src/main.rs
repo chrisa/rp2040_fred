@@ -26,7 +26,8 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use crate::resources::{
-    AssignedResources, Core1Resources, MainResources, PioResources, UsbResources, DirectionResources, DebugPin27Resources, DebugPin28Resources,
+    AssignedResources, Core1Resources, DebugPin27Resources, DebugPin28Resources,
+    DirectionResources, MainResources, PioResources, UsbResources,
 };
 use crate::transport::{GenericTransport as _, Transport};
 
@@ -49,7 +50,7 @@ bind_interrupts!(pub struct PioIrqs {
     PIO1_IRQ_0 => InterruptHandler<PIO1>;
 });
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "only one transport at a time")]
 enum TransportMode {
     Mock,
     Passive,
@@ -62,16 +63,16 @@ async fn main(_spawner: Spawner) {
     let config = embassy_rp::config::Config::new(clock_config);
     let p = embassy_rp::init(config);
     let r = split_resources!(p);
-    let mode = TransportMode::Master;
+    let mode = TransportMode::Mock;
 
     let mut transport: Transport = match mode {
         TransportMode::Mock => Transport::Mock(transport::mock::MockTransport::new()),
-        TransportMode::Passive => {
-            Transport::Passive(transport::passive::PassiveTransport::new(r.core1, r.pio, r.dir, r.debug27))
-        }
-        TransportMode::Master => {
-            Transport::Master(transport::master::BusMasterTransport::new(r.core1, r.pio, r.dir, r.debug27, r.debug28))
-        }
+        TransportMode::Passive => Transport::Passive(transport::passive::PassiveTransport::new(
+            r.core1, r.pio, r.dir, r.debug27,
+        )),
+        TransportMode::Master => Transport::Master(transport::master::BusMasterTransport::new(
+            r.core1, r.pio, r.dir, r.debug27, r.debug28,
+        )),
     };
 
     let mut led = Output::new(r.main.led, Level::Low);
