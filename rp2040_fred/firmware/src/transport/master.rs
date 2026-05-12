@@ -338,7 +338,7 @@ async fn capture_core1_loop(
 
     loop {
         if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
-            Timer::after(Duration::from_micros(1)).await;
+            Timer::after(Duration::from_micros(100)).await;
             continue;
         }
 

@@ -1,9 +1,9 @@
-use core::hint::spin_loop;
 use core::ptr::addr_of_mut;
 
+use embassy_executor::Executor;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::multicore::{spawn_core1, Stack};
-use embassy_time::Instant;
+use embassy_rp::multicore::Stack;
+use embassy_time::{Duration, Instant, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
@@ -25,6 +25,7 @@ static TRACE_QUEUE_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
 static TRACE_RXSTALL_COUNT: AtomicU32 = AtomicU32::new(0);
 static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
+static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 pub struct PassiveTransport {
     trace_samples: Consumer<'static, u32>,
@@ -48,10 +49,18 @@ impl PassiveTransport {
         TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
         TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
 
-        spawn_core1(
+        embassy_rp::multicore::spawn_core1(
             core1_resources.core1,
             unsafe { &mut *addr_of_mut!(CORE1_STACK) },
-            move || capture_core1_loop(pio_resources, dir_resources, debug_resources, producer),
+            move || {
+                let executor1 = EXECUTOR1.init(Executor::new());
+                executor1.run(|spawner| {
+                    spawner.spawn(
+                        capture_core1_loop(pio_resources, dir_resources, debug_resources, producer)
+                            .expect("spawn capture_core1_loop"),
+                    );
+                })
+            },
         );
 
         Self {
@@ -266,7 +275,8 @@ impl GenericTransport for PassiveTransport {
     }
 }
 
-fn capture_core1_loop(pio_resources: PioResources, dir_resources: DirectionResources, debug_resources: DebugPin27Resources, mut trace_samples: Producer<'static, u32>) -> ! {
+#[embassy_executor::task]
+async fn capture_core1_loop(pio_resources: PioResources, dir_resources: DirectionResources, debug_resources: DebugPin27Resources, mut trace_samples: Producer<'static, u32>) -> ! {
     let mut data_dir_d = Output::new(dir_resources.pin_19, Level::Low);
     let mut data_dir_a = Output::new(dir_resources.pin_20, Level::Low);
     let mut data_dir_c = Output::new(dir_resources.pin_21, Level::Low);
@@ -277,25 +287,18 @@ fn capture_core1_loop(pio_resources: PioResources, dir_resources: DirectionResou
     let mut pio = PassivePio::setup(pio_resources, debug_resources.pin);
 
     loop {
-        let mut drained = false;
-        while let Some(sample) = pio.read.rx().try_pull() {
-            drained = true;
-
-            if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
-                continue;
-            }
-
-            if trace_samples.enqueue(sample).is_err() {
-                TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
+        if !TRACE_CAPTURE_ENABLED.load(Ordering::Relaxed) {
+            Timer::after(Duration::from_micros(100)).await;
+            continue;
         }
 
+        let sample = pio.read.rx().wait_pull().await;
+
+        if trace_samples.enqueue(sample).is_err() {
+            TRACE_QUEUE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
         if pio.read.rx().stalled() {
             TRACE_RXSTALL_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
-
-        if !drained {
-            spin_loop();
         }
     }
 }
