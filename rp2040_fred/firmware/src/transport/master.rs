@@ -225,11 +225,11 @@ impl BusMasterTransport {
         // SAFETY: capture only reads these pins
         let capture_pio_resources = unsafe { clone_capture_resources(&pio_resources) };
 
-        // SAFETY: standard core1 stack init pattern
         #[expect(
             clippy::multiple_unsafe_ops_per_block,
             reason = "standard pattern, can't move out of CORE1_STACK"
         )]
+        // SAFETY: standard core1 stack init pattern
         let stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
 
         embassy_rp::multicore::spawn_core1(core1_resources.core1, stack, move || {

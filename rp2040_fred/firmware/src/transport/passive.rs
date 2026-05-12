@@ -54,11 +54,11 @@ impl PassiveTransport {
         TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
         TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
 
-        // SAFETY: standard core1 stack init pattern
         #[expect(
             clippy::multiple_unsafe_ops_per_block,
             reason = "standard pattern, can't move out of CORE1_STACK"
         )]
+        // SAFETY: standard core1 stack init pattern
         let stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
 
         embassy_rp::multicore::spawn_core1(core1_resources.core1, stack, move || {
