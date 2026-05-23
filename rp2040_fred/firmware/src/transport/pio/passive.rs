@@ -7,6 +7,7 @@ use embassy_rp::{
     pio_programs::clock_divider::calculate_pio_clock_divider_value,
     Peri,
 };
+use rp2040_fred_firmware::log_info;
 
 use crate::{resources::PioResources, PioIrqs};
 
@@ -23,7 +24,7 @@ impl<'a> ThisPassivePio<'a> {
         debug_pin: Peri<'a, impl PioPin + 'a>,
     ) -> ThisPassivePio<'a> {
         let program = pio::pio_file!(
-            "../pio/passive_sniffer.pio",
+            "src/transport/pio/passive.pio",
             select_program("fred_passive_sniffer"),
             options(max_program_size = 32)
         );
@@ -82,6 +83,8 @@ impl<'a> ThisPassivePio<'a> {
         batch.restart(&mut pio.sm0);
         batch.set_enable(&mut pio.sm0, true);
         batch.execute();
+
+        log_info!("PIO initialised for passive");
 
         let _ = pio.sm0.rx().stalled();
 

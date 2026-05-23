@@ -36,25 +36,25 @@ impl<'a> ThisMasterPio<'a> {
         debug_pin: Peri<'a, impl PioPin + 'a>,
     ) -> ThisMasterPio<'a> {
         let fred_bm_clock = pio::pio_file!(
-            "../pio/bus_master.pio",
+            "src/transport/pio/master.pio",
             select_program("fred_bm_clock"),
             options(max_program_size = 32)
         );
 
         let fred_bm_control = pio::pio_file!(
-            "../pio/bus_master.pio",
+            "src/transport/pio/master.pio",
             select_program("fred_bm_control"),
             options(max_program_size = 32)
         );
 
         let fred_bm_data_write = pio::pio_file!(
-            "../pio/bus_master.pio",
+            "src/transport/pio/master.pio",
             select_program("fred_bm_data_write"),
             options(max_program_size = 32)
         );
 
         let fred_bm_data_read = pio::pio_file!(
-            "../pio/bus_master.pio",
+            "src/transport/pio/master.pio",
             select_program("fred_bm_data_read"),
             options(max_program_size = 32)
         );
@@ -70,8 +70,6 @@ impl<'a> ThisMasterPio<'a> {
         let control_program = pio.common.load_program(&fred_bm_control.program);
         let write_program = pio.common.load_program(&fred_bm_data_write.program);
         let read_program = pio.common.load_program(&fred_bm_data_read.program);
-
-        log_info!("PIO programs loaded");
 
         let p0 = pio.common.make_pio_pin(pio_resources.pin_0);
         let p1 = pio.common.make_pio_pin(pio_resources.pin_1);
@@ -141,6 +139,7 @@ impl<'a> ThisMasterPio<'a> {
             direction: ShiftDirection::Left,
             auto_fill: false,
         };
+        control_cfg.fifo_join = embassy_rp::pio::FifoJoin::TxOnly;
         control.set_config(&control_cfg);
 
         let mut write_cfg = Config::default();
@@ -152,6 +151,7 @@ impl<'a> ThisMasterPio<'a> {
             direction: ShiftDirection::Left,
             auto_fill: false,
         };
+        write_cfg.fifo_join = embassy_rp::pio::FifoJoin::TxOnly;
         write.set_config(&write_cfg);
 
         let mut read_cfg = Config::default();
@@ -163,6 +163,7 @@ impl<'a> ThisMasterPio<'a> {
             direction: ShiftDirection::Left,
             auto_fill: false,
         };
+        read_cfg.fifo_join = embassy_rp::pio::FifoJoin::RxOnly;
         read.set_config(&read_cfg);
 
         let mut batch = PioBatch::new();
@@ -176,7 +177,7 @@ impl<'a> ThisMasterPio<'a> {
         batch.set_enable(&mut read, true);
         batch.execute();
 
-        log_info!("PIO initialised on core1");
+        log_info!("PIO initialised for master");
 
         ThisMasterPio {
             _clock: clock,

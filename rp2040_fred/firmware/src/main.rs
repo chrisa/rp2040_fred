@@ -63,7 +63,7 @@ async fn main(_spawner: Spawner) {
     let config = embassy_rp::config::Config::new(clock_config);
     let p = embassy_rp::init(config);
     let r = split_resources!(p);
-    let mode = TransportMode::Mock;
+    let mode = TransportMode::Master;
 
     let mut transport: Transport = match mode {
         TransportMode::Mock => Transport::Mock(transport::mock::MockTransport::new()),

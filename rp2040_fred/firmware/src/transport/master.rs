@@ -394,6 +394,7 @@ async fn core1_loop(
     loop {
         Timer::after(Duration::from_millis(10)).await;
         for cmd in CMD_SEQUENCE {
+            Timer::after(Duration::from_nanos(50)).await;
             let value = bus.command_cycle(cmd).await;
             if commands
                 .enqueue(FeedbackCommand::from_bytes(index, cmd, value))
