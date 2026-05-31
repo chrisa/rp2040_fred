@@ -20,7 +20,7 @@ class FredUsbClient:
         vid: int,
         pid: int,
         *,
-        timeout_ms: int = 250,
+        timeout_ms: int = 1000,
         x_counts_per_mm: float = 100.0,
         z_counts_per_mm: float = 100.0,
     ) -> None:
@@ -67,6 +67,9 @@ class FredUsbClient:
 
     def refresh(self) -> Dict[str, object]:
         return dict(self._inner.refresh())
+
+    def next_snapshot(self) -> Dict[str, object]:
+        return dict(self._inner.next_snapshot())
 
     def read_capture_samples(self, timeout_ms: int = 1) -> list[int]:
         raise NotImplementedError(

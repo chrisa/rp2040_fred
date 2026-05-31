@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import time
-
 from fred_client import FredUsbClient
 
 
 def main() -> None:
     client = FredUsbClient(0x2E8A, 0x000A)
-    client.enable_polling(period_ms=25)
+    client.enable_polling(period_ms=10)
 
     try:
         while True:
-            print(client.refresh())
-            time.sleep(0.05)
+            print(client.next_snapshot())
     except KeyboardInterrupt:
         pass
     finally:

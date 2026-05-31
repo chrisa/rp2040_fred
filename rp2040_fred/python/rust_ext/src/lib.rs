@@ -19,7 +19,7 @@ struct FredUsbClient {
 #[pymethods]
 impl FredUsbClient {
     #[new]
-    #[pyo3(signature = (vid, pid, *, timeout_ms=250, x_counts_per_mm=100.0, z_counts_per_mm=100.0))]
+    #[pyo3(signature = (vid, pid, *, timeout_ms=1000, x_counts_per_mm=100.0, z_counts_per_mm=100.0))]
     fn new(
         vid: u16,
         pid: u16,
@@ -51,7 +51,12 @@ impl FredUsbClient {
     }
 
     fn refresh<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let snapshot = self.with_client(py, FredMonitorClient::refresh)?;
+        let snapshot = self.with_client(py, FredMonitorClient::next_snapshot)?;
+        snapshot_to_dict(py, snapshot)
+    }
+
+    fn next_snapshot<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let snapshot = self.with_client(py, FredMonitorClient::next_snapshot)?;
         snapshot_to_dict(py, snapshot)
     }
 

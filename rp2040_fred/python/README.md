@@ -31,9 +31,9 @@ maturin develop
 from fred_client import FredUsbClient
 
 client = FredUsbClient(vid=0x2E8A, pid=0x000A)
-client.enable_polling(period_ms=25)
+client.enable_polling(period_ms=10)
 
-snapshot = client.refresh()
+snapshot = client.next_snapshot()
 print(snapshot)
 # {
 #   "x_mm": ...,
@@ -48,6 +48,9 @@ print(snapshot)
 client.disable_polling()
 client.close()
 ```
+
+`refresh()` is kept as a compatibility alias for reading the next telemetry
+snapshot.
 
 ## Unsupported capture API
 
