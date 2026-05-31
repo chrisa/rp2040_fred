@@ -1,0 +1,337 @@
+Threading Spindle Sync Findings
+===============================
+
+Date
+- 2026-04-23
+
+Question
+- During the threading run in `make.cap` / `rp2040_fred/host/make.decoded`, is spindle sync entered by a specific bus command from the host, or is it entirely handled inside the lathe-side canned cycle?
+
+Confirmed Findings
+- The BBC host software understands `G84` directly:
+  - `tcl202.asm` includes `G84=THREAD CYCLE Z=TOT.LENGTH I=DEPTH K=No OF CUTS F=PITCH`.
+- The host manufacturing runtime expands the canned cycle on the host side:
+  - `disk/CNCMAK1.decoded.txt` unpacks program fields into `G,M,X,Z,I,K,F,S`.
+  - In the threading section it computes pass depths and loops over the number of cuts.
+  - For each pass it issues `do(84,0,0,-Z,0,0,0,0,SL,655.36*X(7))`.
+  - It also issues separate retract / return moves around that threaded pass.
+- The raw bus trace shows no special `FC80` opcode at threading start.
+  - Every `FC80` write observed in `make.cap` is one of:
+    - `03, 02, 01, 00, 07, 06, 05, 04, 0D, 0C`
+  - Those are the fixed feedback / DRO polling commands, not motion opcodes.
+- The threading motion appears on the bus as repeated multi-register parameter blocks in `FC92..FCA5`, not as a one-byte command on `FC80`.
+
+Most Likely Interpretation
+- There is no dedicated one-byte "enter spindle sync" command sent via `FC80`.
+- Instead, the host expands `G84` into repeated lower-level motion primitives.
+- One of those lower-level primitives is almost certainly a synchronized thread-pass command.
+- That synchronized pass is staged through the `FC92..FCA5` register block and then executed by the lathe controller.
+- The lathe executes each armed pass autonomously, including the real-time spindle coupling for that pass.
+
+Observed Threading-Era Register Pattern
+- Repeated X-only move blocks:
+  - `94/95` nonzero, `96/97 = 0`, `A0 = 3D`
+- Repeated Z return / reposition blocks:
+  - `96 = 24`, `97 = FA`  -> `-1500`
+  - `A0 = 3D`
+- Repeated candidate synchronized thread-pass blocks:
+  - `92 = 54`
+  - `96 = DC`
+  - `97 = 05`  -> `+1500`
+  - `A2 = FF`
+  - `A3 = 7F`
+  - `A4 = 01`
+  - `A0 = 3D`
+
+Current Conclusion
+- Spindle sync is not "entirely handled by lathe-side software running the canned cycle" in the sense of the lathe receiving only a high-level `G84` request.
+- The canned cycle logic is on the BBC host.
+- The host sends a per-pass threading primitive.
+- The lathe then performs the synchronized motion for that primitive internally.
+
+Open Work
+- Decode the `FC92..FCA5` block field-by-field.
+- Map host-side staging addresses used before `*PLONK0` onto the observed bus registers.
+- Determine which field selects thread mode and which field carries pitch / feed scaling.
+
+Strange First Bytes
+-------------------
+- The capture does not show `FC92=81` as a motion opcode.
+- `FC92=81` appears only twice, and both times it is in a mostly blank control frame with the other fields largely `FF` or `00`.
+- That makes `0x81` look like a rare setup / state / sentinel value, not a geometric move.
+- `FC92=FF` is much more common and behaves like the default filler / blank first byte for non-motion frames.
+- In other words:
+  - `0x54` is the real thread-pass opcode
+  - `0x81` is a rare control/setup byte
+  - `0xFF` is the common blank/default byte in these control blocks
+- There is also a separate startup/mode-like family in the notes with `FC93=03` and `A0=7F`, which fits the same overall pattern of non-geometric setup traffic.
+
+
+Additional Decoding
+-------------------
+
+The host-side `do(...)` helper in `disk/CNCMAK1.decoded.txt` now provides a direct register map.
+
+Relevant code shape
+- `do(m%(1),...,m%(10))`
+- `addr%=&92`
+- write `m%(1)`, `m%(2)` as bytes
+- write `m%(3)`..`m%(9)` as 16-bit words
+- write `m%(10)` as two 16-bit words
+- then write zero to `&AF`
+
+This maps directly onto the bus register block:
+- `FC92`   = `m1`
+- `FC93`   = `m2`
+- `FC94/95` = `m3`  (16-bit, low then high)
+- `FC96/97` = `m4`
+- `FC98/99` = `m5`
+- `FC9A/9B` = `m6`
+- `FC9C/9D` = `m7`
+- `FC9E/9F` = `m8`
+- `FCA0/A1` = `m9`
+- `FCA2/A3` = low 16 bits of `m10`
+- `FCA4/A5` = high 16 bits of `m10`
+- `FCAF`    = trailing zero write after block load
+
+Important correction
+- `FCA0=3D` is not an execute opcode.
+- It is just the low byte of `m9`.
+- In the threading code path, `m9` is `SL`, derived from pitch.
+
+Threading Pass Decode
+- Host threading code issues:
+  - `do(84,0,0,-Z,0,0,0,0,SL,655.36*X(7))`
+- Therefore the repeated thread-pass block decodes as:
+  - `FC92 = 84` (`0x54`)  -> thread-pass opcode / mode
+  - `FC93 = 0`
+  - `FC94/95 = 0`
+  - `FC96/97 = -Z`
+  - `FC98..9F = 0`
+  - `FCA0/A1 = SL`
+  - `FCA2..A5 = 655.36 * pitch`
+
+Observed capture match
+- Repeated candidate thread-pass block:
+  - `92=54`
+  - `96=DC`
+  - `97=05`
+  - `A0=3D`
+  - `A2=FF`
+  - `A3=7F`
+  - `A4=01`
+- Decodes to:
+  - opcode `84`
+  - Z distance `+1500`
+  - `SL = 0x003D = 61`
+  - pitch accumulator `0x00017FFF = 98303`
+
+Pitch scaling observation
+- `98303 / 655.36 = 149.998...`
+- That is effectively `150`, strongly implying the threading pass used pitch field value `F=150` in host units.
+
+X Move Decode
+- The `do(...)` helper halves `m3` before emitting it.
+- That matches the observed `FC94/95` threading infeed values such as:
+  - `0xFF82 = -126`
+  - `0x007E = +126`
+  - `0xFF7A = -134`
+  - `0x0086 = +134`
+- These are the radius-side emitted values corresponding to host-side X diameter semantics.
+
+Implication
+- There is a specific low-level threading command on the bus:
+  - `FC92 = 84`
+- But it is sent once per pass as part of the host-expanded canned cycle.
+- So the architecture is:
+  - host expands `G84`
+  - host emits repeated `opcode 84` motion blocks
+  - lathe executes each threaded pass with internal spindle synchronization
+
+Helper Register Decode
+- `FCAF`
+  - `do(...)` writes zero to `&AF` after loading the parameter block.
+  - So the repeated `FCAF=00` activity in the trace is part of block submission / trailing strobe.
+- `FCAD`
+  - `SPEED` writes zero to `&AD`.
+  - So `FCAD=00` is tied to the separate speed-trigger/read path, not to the thread-pass parameter payload itself.
+- `FC93`
+  - This is the second `do(...)` argument.
+  - Cross-check:
+    - host code uses `do(0,5,...)` in one control path
+    - the capture contains exactly one `FC93=05` block
+  - Likewise, the repeated `FC93=03` blocks are consistent with `do(0,3,...)` spindle-control style calls.
+
+Refined Summary
+- The host-side `do(...)` helper provides the on-wire register order directly.
+- The repeated thread-pass block in the capture is not:
+  - `A0=3D` as an execute opcode
+- It is:
+  - `FC92=84` as the actual thread-pass opcode
+  - `FCA0/A1=SL` as the ninth `do(...)` argument
+  - `FCA2..A5=655.36*pitch` as the tenth `do(...)` argument
+- Therefore the specific low-level threading command on the bus is `opcode 84`, sent once per synchronized pass.
+- There is still no separate `FC80` "enter spindle sync" command at threading start.
+
+Turret / Tool Change
+--------------------
+- The turret path is host-driven and uses the current tool position `C%` plus the requested tool `K`.
+- The BASIC/ROM logic computes a relative step count `num` from `C%` and `Q%=K`.
+- That means the user-facing intent is absolute tool selection ("go to tool N"), but the machine motion is expressed as a relative turret rotation.
+- The ROM help text explicitly distinguishes the two concepts for `M06`:
+  - `I = TOOL No`
+  - `K = Turret No`
+- So the tool table index and the physical turret station are separate values.
+- The bus-level command family is `opcode 1`, not a special turret opcode.
+- The turret sequence uses three `opcode 1` moves in a row:
+  - coarse rotation
+  - fine alignment
+  - settle
+- The capture shows this family as nonzero payloads in the `FC98/99` slot, with the surrounding fields used for timing/speed.
+- There is no separate "go to next" bus command in the evidence so far.
+- The acknowledgement is the normal motion handshake:
+  - host waits on `FCF0` ready/busy
+  - once the move completes, the host updates `C%=Q%`
+- So from the wire's perspective, the turret is "move by a relative amount to reach the requested tool", not "advance one station" as a dedicated opcode.
+
+
+Annotated Thread Pass
+---------------------
+
+One clean stabilized threading pass in `make.cap` is:
+
+1. X infeed at end of thread
+- Raw block at step `2644114`:
+  - `92=00`
+  - `93=00`
+  - `94=82`
+  - `95=FF`
+  - `A0=3D`
+- Decode:
+  - opcode `0`, subcode `0`
+  - X delta `0xFF82 = -126`
+  - reposition speed/limit `SL = 0x003D = 61`
+- Matching decoded motion:
+  - around `02658689 .. 02692971`
+  - X moves from about `-000075` to `-000201`
+  - Z stays at `-001500`
+
+2. Synchronized thread pass
+- Raw block at step `2682718`:
+  - `92=54`
+  - `93=00`
+  - `94=00`
+  - `95=00`
+  - `96=DC`
+  - `97=05`
+  - `A0=3D`
+  - `A2=FF`
+  - `A3=7F`
+  - `A4=01`
+- Decode:
+  - opcode `84`, subcode `0`
+  - Z distance `+1500`
+  - `SL = 61`
+  - pitch field `≈ 150`
+- Matching decoded motion:
+  - around `02734190 .. 02958628`
+  - X remains about `-000201`
+  - Z traverses from near `-001500` back to `0`
+
+3. X retract at Z home end
+- Raw block at step `2723278`:
+  - `92=00`
+  - `93=00`
+  - `94=7E`
+  - `95=00`
+  - `A0=3D`
+- Decode:
+  - opcode `0`, subcode `0`
+  - X delta `+126`
+  - `SL = 61`
+- Matching decoded motion:
+  - around `03084977 .. 03114516`
+  - X moves from about `-000201` back to `-000075`
+  - Z stays near `0`
+
+4. Z return to thread start
+- Raw block at step `3102334`:
+  - `92=00`
+  - `93=00`
+  - `96=24`
+  - `97=FA`
+  - `A0=3D`
+- Decode:
+  - opcode `0`, subcode `0`
+  - Z delta `0xFA24 = -1500`
+  - `SL = 61`
+- Matching decoded motion:
+  - around `03122800 .. 03411985`
+  - X stays near `-000075`
+  - Z returns from `0` to `-001500`
+
+Pass Structure Summary
+- The pass is not one command.
+- It is a 4-block sequence:
+  - X infeed
+  - threaded synchronized pass (`opcode 84`)
+  - X retract
+  - Z return
+
+
+Non-Thread Opcodes
+------------------
+
+Opcode `0`
+- This is the general non-thread / direct move family.
+- Confirmed uses:
+  - `do(0,0,XX,0,0,0,0,0,0,0)`
+  - `do(0,0,0,Z,0,0,0,0,0,0)`
+  - `do(0,0,-X,0,0,0,0,0,SL,0)`
+  - `do(0,0,0,-Z,0,0,0,0,SL,0)`
+- Meaning:
+  - `m2=0` -> basic axis move / reposition
+  - `m3` -> X delta
+  - `m4` -> Z delta
+  - `m9` -> speed / slew limit (`SL`)
+  - `m10` -> unused in these basic reposition moves
+
+Opcode `0` subcodes for spindle control
+- `do(0,5,0,0,0,0,0,0,0,0)` appears in the `M05` path.
+- `do(0,X(2),0,0,0,0,0,0,SSL,0)` is used when `X(2)` is `3` or `4`, matching `M03` / `M04`.
+- Therefore:
+  - `m1=0, m2=3` -> spindle start forward with speed in `m9`
+  - `m1=0, m2=4` -> spindle start reverse with speed in `m9`
+  - `m1=0, m2=5` -> spindle stop
+
+Opcode `1`
+- This is the feed-controlled / timed move family.
+- In normal cutting path:
+  - if `F>0`, host sets `G=1`
+  - then issues `do(G,m,-X,-Z,0,0,0,FFL,SSL,0)`
+  - `FFL = INT(95000/F)`
+- Therefore opcode `1` is the non-thread feed move form used when a feedrate is active.
+- Parameters for this family:
+  - `m3` / `m4` = X / Z deltas
+  - `m8` = feed timing value derived from `F`
+  - `m9` = `SSL`
+  - `m6/m7` can also carry arc terms after `ci:` preprocessing
+
+Opcode `1` in turret path
+- `PROCturret` uses:
+  - `do(1,0,0,0,-832*num,0,0,400,SSL,0)`
+  - `do(1,0,0,0,159+68*num,0,0,300,SSL,0)`
+  - `do(1,0,0,0,10,0,0,600,SSL,0)`
+- This strongly suggests opcode `1` is a more general timed-motion primitive, not just a plain X/Z feed move.
+- In that usage:
+  - `m5` is likely an auxiliary / turret movement count
+  - `m8` is an explicit timing value
+
+Current Best Model
+- `opcode 0`:
+  - direct reposition and spindle-control family
+- `opcode 1`:
+  - timed / feed-controlled motion family
+  - covers fed X/Z moves and likely auxiliary timed moves such as turret indexing
+- `opcode 84`:
+  - synchronized thread-pass family

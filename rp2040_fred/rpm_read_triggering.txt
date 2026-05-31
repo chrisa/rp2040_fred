@@ -1,0 +1,82 @@
+RPM Read Triggering Investigation
+=================================
+
+Context
+-------
+
+- In feedback mode, the host only appears to refresh RPM when `S` is pressed.
+- After pressing `S`, the displayed RPM updates for a short time, then holds the last value.
+- If the spindle speed is changed directly on the lathe after that, the display does not track the new RPM until `S` is pressed again.
+- In manufacturing mode, RPM appears to update continuously.
+
+Important caveat
+----------------
+
+The current host decoder retains the last decoded RPM until newer RPM bytes arrive. That means a repeated RPM value in decoded output does not prove the lathe is continuously sending fresh speed data; it may simply be the decoder holding the previous value.
+
+Files examined
+--------------
+
+- `feedback.cap`
+- `make.cap`
+- `tcl202.asm`
+- `tcl125_2.02.rom`
+
+Commands used
+-------------
+
+- `cargo run --manifest-path rp2040_fred/host/Cargo.toml -- decode file feedback.cap | grep -v capture`
+- `cargo run --manifest-path rp2040_fred/host/Cargo.toml -- decode file make.cap | grep -v capture`
+- `cargo run --manifest-path rp2040_fred/host/Cargo.toml -- raw file feedback.cap`
+- `cargo run --manifest-path rp2040_fred/host/Cargo.toml -- raw file make.cap`
+
+Current findings
+----------------
+
+1. The normal feedback loop is still the same `FC80` write / `FCF0` status read / `FCF1` data read path already identified from the ROM.
+
+2. In `feedback.cap`, the only significant sideband accesses outside that normal loop are:
+   - `FC88` read, then `FC88` write `00`
+   - `FC89` read, then `FC89` write `00`
+
+3. Counts seen in `feedback.cap`:
+   - `FC88`: 5 read+write pairs
+   - `FC89`: 2 read+write pairs
+
+4. These `FC88`/`FC89` accesses are rare and one-shot. They do not appear to be part of the regular feedback polling cycle.
+
+5. Context around the first observed `FC89` pair:
+   - normal `FCF0` polling
+   - `FCF1` read returning `00`
+   - `FC89` read `00`
+   - `FC89` write `00`
+   - return to normal `FCF0` polling
+
+6. Context around the first observed `FC88` pair:
+   - normal `FCF0` polling
+   - `FCF1` read returning `00`
+   - `FC88` read `00`
+   - `FC88` write `00`
+   - return to normal `FCF0` polling
+
+7. `FC88` correlates more strongly than `FC89` with visible RPM changes in decoded output.
+   - Around one `FC88` event, decoded RPM dropped to `0`.
+   - Around another `FC88` event, decoded RPM started moving through small values (`1`, `53`, `159`, `264`), which looks like a measurement/update sequence.
+
+8. In `make.cap`, `FC88` and `FC89` do not appear at all.
+   - Instead there are repeated accesses in the `FCA0..FCAF` region.
+   - This suggests manufacturing mode may enable a different operating mode in the controller, one in which speed is refreshed continuously.
+
+- The `S` key in feedback mode sends the FC88 sequence, which is "start reading rpm".
+- The `Z` key in feedback mode sends the FC89 sequence, which is "reset axis counters", i.e. zero the axes.
+
+Working hypothesis
+------------------
+
+- Manufacturing mode likely configures the controller through `FCA0..FCAF` so that RPM updates continue automatically, without needing the `FC88`/`FC89` one-shot action.
+
+What is not yet proven
+----------------------
+
+- Whether the `FC88`/`FC89` action latches one sample, starts a timed acquisition window, clears stale data, or acknowledges an existing measurement-ready flag.
+- Which exact manufacturing-mode register write causes continuous RPM updates.

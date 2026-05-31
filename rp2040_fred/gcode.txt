@@ -1,0 +1,500 @@
+G-Code Execution And Motion Commanding
+======================================
+
+Question
+--------
+
+Given:
+
+- `make.cap`
+- its raw bus dump
+- its decoded feedback dump
+- the 6502 ROM / disassembly
+
+determine where G-code is converted into motion, specifically:
+
+- does the captured traffic show the host sending a G-code program to the lathe, with the lathe interpreting canned cycles internally?
+- or does it show the 6502 host already converting G-code into lower-level motion / cycle commands?
+
+
+Short answer
+------------
+
+`make.cap` does **not** show the host sending raw G-code text or a G-code-like program to the lathe.
+
+It shows the 6502 host sending **binary motion / cycle parameter blocks** to the lathe, plus a continuous feedback poll.
+
+The most likely model is:
+
+1. the 6502 host interprets the G-code program, including canned cycles such as `G84`
+2. the host converts that into lower-level lathe commands and parameters
+3. the lathe executes those lower-level moves or synchronized motion primitives autonomously
+4. the host keeps polling feedback during execution
+
+So the G-code interpretation is on the **host side**, not on the lathe side.
+
+
+Important terminology
+---------------------
+
+In the `raw` output, the `A` column is relative to `0xFC00`.
+
+Examples:
+
+- `80` means `FC80`
+- `F0` means `FCF0`
+- `F1` means `FCF1`
+- `92` means `FC92`
+- `A0` means `FCA0`
+
+
+Files used
+----------
+
+- `make.cap`
+- `tcl202.asm`
+- `tcl125_2.02.rom`
+
+Useful commands:
+
+- `cargo run --manifest-path rp2040_fred/host/Cargo.toml -- raw file make.cap`
+- `cargo run --manifest-path rp2040_fred/host/Cargo.toml -- decode file make.cap`
+
+
+What dominates the trace
+------------------------
+
+Nearly all bus traffic in `make.cap` is still the normal feedback poll already identified elsewhere:
+
+- read `FCF0`
+- write command to `FC80`
+- read `FCF0`
+- read reply from `FCF1`
+
+That is the high-rate background traffic.
+
+The motion-control traffic is much sparser. In a raw dump of about 2.37 million lines, the non-feedback traffic appears as small clusters of accesses to:
+
+- `FC92..FCA5`
+- `FCAD`
+- `FCAF`
+
+This is already strong evidence against "host uploads G-code text to lathe":
+
+- the traffic is binary, not ASCII
+- it is sparse, not a streamed program upload
+- it lines up with motion phases, not with line-by-line parsing
+
+
+Observed register families in `make.cap`
+----------------------------------------
+
+The recurring non-feedback write patterns are of a few types.
+
+1. Startup / mode-like pattern
+
+Typical cluster:
+
+- `93 = 03`
+- `A0 = 7F`
+
+With surrounding zeros in:
+
+- `92`
+- `94`
+- `95`
+- `96`
+- `97`
+- `A2`
+- `A3`
+- `A4`
+
+This appears several times early in the capture and looks like setup / mode / state changes, not a move with geometric content.
+
+
+2. Execute-like pattern using `A0 = 3D`
+
+Many motion-related clusters end with:
+
+- `A0 = 3D`
+
+This looks like a trigger / command byte after loading parameters into nearby registers.
+
+I would currently treat `A0` as "command / execute / mode" until proven otherwise.
+
+
+3. Z-related signed values in `96/97`
+
+Two very clear repeated pairs are:
+
+- `96 = DC`, `97 = 05`  -> `0x05DC` -> `+1500`
+- `96 = 24`, `97 = FA`  -> `0xFA24` -> `-1500`
+
+Interpreting `96/97` as little-endian signed 16-bit gives exact values that match the decoded Z travel seen in the feedback output.
+
+This is one of the strongest pieces of evidence that the host is sending binary motion parameters rather than raw G-code.
+
+
+4. X-related signed values in `94/95`
+
+The repeated nonzero `94/95` pairs include:
+
+- `82 FF` -> `0xFF82` -> `-126`
+- `7E 00` -> `+126`
+- `7A FF` -> `-134`
+- `86 00` -> `+134`
+- `72 FF` -> `-142`
+- `8E 00` -> `+142`
+- `6B FF` -> `-149`
+- `95 00` -> `+149`
+- `65 FF` -> `-155`
+- `9B 00` -> `+155`
+- `5F FF` -> `-161`
+- `A1 00` -> `+161`
+- `5B FF` -> `-165`
+- `A5 00` -> `+165`
+- `57 FF` -> `-169`
+- `A9 00` -> `+169`
+- `54 FF` -> `-172`
+- `AC 00` -> `+172`
+- `52 FF` -> `-174`
+- `AE 00` -> `+174`
+
+These are not random.
+
+They alternate sign and gradually change magnitude, which looks very much like a pass-by-pass infeed / retract pattern for the threading cycle.
+
+That is exactly what you would expect from the host having already expanded a canned thread cycle into repeated lower-level passes.
+
+
+5. Repeated fixed parameter block
+
+Another repeated cluster contains:
+
+- `92 = 54`
+- `96 = DC`
+- `97 = 05`
+- `A0 = 3D`
+- `A2 = FF`
+- `A3 = 7F`
+- `A4 = 01`
+
+This recurs many times.
+
+A reasonable interpretation is that this is a specific motion primitive or phase of the threading cycle, probably one of:
+
+- synchronized thread pass
+- return / reposition
+- phase / sign / mode setup for the next pass
+
+The exact meaning of each field is not fully known yet, but the structure is clearly binary motion/cycle control, not G-code text.
+
+
+6. `FCAD` and `FCAF`
+
+There are occasional accesses to:
+
+- `FCAD`
+- `FCAF`
+
+Usually read then write zero.
+
+These look like handshake / acknowledge / completion / latch-clear style registers rather than motion payload registers.
+
+
+Decoded motion profile and how it matches the binary writes
+-----------------------------------------------------------
+
+The decoded trace from `make.cap` shows long periods of motion with **no continuous stream of changing command data** on the bus.
+
+That alone is important:
+
+- if the host were streaming every interpolated position, the raw trace would show continuous changing motion payloads
+- it does not
+
+Instead, what we see is:
+
+1. small parameter bursts
+2. long intervals of autonomous motion while only feedback polling continues
+
+That means the lathe is executing motion internally once armed with a parameter block.
+
+
+Concrete shape of the threading motion
+--------------------------------------
+
+The decoded output near the end of the run shows a repeated pattern like this:
+
+1. X fixed near `-000075`, Z moves toward `-001500`
+2. X steps deeper while Z stays near the end position
+3. X reaches about `-000249` while Z is still near `-001500`
+4. then Z traverses back toward `0` while X stays fixed near `-000249`
+5. then X retracts back toward `-000075` while Z is near `0`
+6. then Z moves negative again toward `-001500`
+7. the cycle repeats
+
+Example excerpt from the decoded output:
+
+- `09677382  -000075  -001500`
+- `09686553  -000112  -001500`
+- `09705178  -000204  -001500`
+- `09722106  -000234  -001500`
+- `09731301  -000249  -001500`
+- then Z starts moving while X stays at `-000249`:
+  - `09758281  -000249  -001548`
+  - `09810159  -000249  -001107`
+  - `09862233  -000249  -000750`
+  - `09923408  -000249  -000323`
+  - `09983124  -000249  -000000`
+- then X retracts while Z remains near zero:
+  - `10120821  -000219  -000000`
+  - `10148094  -000114  -000000`
+  - `10166095  -000080  -000000`
+  - `10175511  -000075  -000002`
+- then Z moves back negative at roughly the retracted X:
+  - `10184763  -000075  -000071`
+  - `10237031  -000075  -000612`
+  - `10319637  -000075  -001138`
+  - `10446438  -000075  -001500`
+
+This is exactly the sort of pattern expected from a thread-cutting pass sequence.
+
+Crucially, the raw trace does **not** show a continuous stream of X/Z setpoints during this motion. It only shows occasional short parameter-load bursts. Therefore:
+
+- the host is not streaming every path point
+- the lathe is executing a lower-level motion primitive after being configured
+
+
+How the parameter bursts line up with the motion
+------------------------------------------------
+
+Some especially useful clusters are:
+
+1. Z negative travel
+
+- `96 = 24`
+- `97 = FA`
+- `A0 = 3D`
+
+Interpreted as signed little-endian:
+
+- `96/97 = -1500`
+
+This matches the repeated movement toward `Z = -1500`.
+
+
+2. Z positive travel / return
+
+- `92 = 54`
+- `96 = DC`
+- `97 = 05`
+- `A2 = FF`
+- `A3 = 7F`
+- `A4 = 01`
+- `A0 = 3D`
+
+Interpreted:
+
+- `96/97 = +1500`
+
+This matches the repeated full-length travel in the opposite Z direction.
+
+
+3. X-only infeed / retract
+
+Clusters with only `94/95` changing and `96/97 = 0` appear between the Z-travel clusters:
+
+Examples:
+
+- `94 = 82`, `95 = FF`, `A0 = 3D`
+- `94 = 7E`, `95 = 00`, `A0 = 3D`
+- `94 = 7A`, `95 = FF`, `A0 = 3D`
+- `94 = 86`, `95 = 00`, `A0 = 3D`
+
+This strongly suggests an X-only move parameterized in `94/95`, again consistent with pass-by-pass thread infeed / retract.
+
+
+What is missing from the trace
+------------------------------
+
+There is no sign of:
+
+- ASCII G-code lines
+- tokenized G-code blocks
+- line buffers being uploaded to the lathe
+- a large one-time transfer corresponding to the whole program
+
+If the lathe were itself interpreting the G-code program, some form of program upload would be expected.
+
+Instead, the trace only shows:
+
+- feedback polling
+- short binary parameter bursts
+- autonomous motion between bursts
+
+This is much more consistent with the 6502 host performing the G-code interpretation itself.
+
+
+ROM / disassembly evidence
+--------------------------
+
+The ROM supports the same conclusion.
+
+
+1. The host ROM knows the G-code vocabulary
+
+The help text in `tcl202.asm` includes:
+
+- `G81=O/Dia TURNING CYCLE`
+- `G82=FACING CYCLE`
+- `G83=PECK DRILL CYCLE`
+- `G84=THREAD CYCLE Z=TOT.LENGTH I=DEPTH K=No OF CUTS F=PITCH`
+
+See:
+
+- `tcl202.asm` around lines `3014..3018`
+
+This shows that the 6502 software itself understands the canned cycles as user/program concepts.
+
+
+2. The ROM contains host-side motion calls named `do(...)`
+
+Relevant strings:
+
+- `do(0,0,0,-(Z+ZO),0,0,0,0,0,0):XP=XP+(SC*XO):ZP=ZP+(SC*ZO):`
+- `do(0,5,0,0,0,0,0,0,0,0):`
+- `do(0,0,DX,0,0,0,0,0,SSL,0):`
+- `do(0,0,0,DZ,0,0,0,0,SSL,0)`
+
+See:
+
+- `tcl202.asm` around lines `1198`, `1202`, `1463`, `1467`
+
+These strings strongly suggest the host program is computing `DX`, `DZ`, offsets, scales, etc., then invoking a lower-level motion routine.
+
+That is exactly the architecture implied by the trace:
+
+- G-code / cycle logic on the host
+- binary motion primitive issued to the lathe
+
+
+3. Indexed access into the `FCxx` register block
+
+The obvious direct `STA $FC92`-style accesses are not easy to find in the disassembly, but the ROM defines:
+
+- `FRED_4F = $FC4F`
+
+and the disassembly contains indexed access against that base, e.g.:
+
+- `INC FRED_4F,X`
+
+This is important because:
+
+- base `FC4F` plus index `0x43` reaches `FC92`
+- base `FC4F` plus index `0x51` reaches `FCA0`
+- base `FC4F` plus index `0x60` reaches `FCAF`
+
+So the `FC92..FCAF` accesses seen in `make.cap` can be explained by indexed access into a control-register block rather than explicit absolute instructions for each register.
+
+The disassembly around this area is not especially clean, so this should be treated as supportive evidence rather than a final decoded routine listing.
+
+
+Interpretation of where the canned cycle runs
+---------------------------------------------
+
+The best current model is:
+
+1. the 6502 host parses the G-code
+2. for a canned cycle such as `G84`, the host expands the cycle into a sequence of lower-level binary motion operations
+3. each lower-level operation is loaded into the `FC92..FCA5` register block
+4. a command byte such as `A0 = 3D` or `A0 = 7F` causes the lathe controller to execute that operation
+5. the host waits / polls / acknowledges via the feedback interface and handshake registers such as `FCAD` / `FCAF`
+6. the next segment or pass is then loaded
+
+So the lathe may still be "smart" enough to execute a synchronized motion primitive, but it is **not** running the original G-code program internally.
+
+That distinction matters:
+
+- the lathe is not a G-code interpreter
+- it is a lower-level motion executor with a binary command interface
+
+
+Answer to the original question
+-------------------------------
+
+Where is G-code converted to position commands?
+
+In the **6502 host software**.
+
+`make.cap` does **not** show the host sending G-code to the lathe.
+
+It shows the host sending lower-level binary motion / cycle parameters to the lathe, with the lathe then carrying out those moves while the host polls feedback.
+
+So:
+
+- **not** "send G-code program and let the lathe run canned cycles internally"
+- **yes** "host converts G-code into lower-level positioning / cycle commands"
+
+But with one nuance:
+
+- the host does **not** appear to stream every interpolated position sample
+- instead it sends a compact command block for each motion phase or pass, and the lathe executes that phase autonomously
+
+
+Implications for the replacement host
+-------------------------------------
+
+To replace the original host, the likely work items are:
+
+1. reproduce the host-side interpretation of G-code and canned cycles
+2. reverse engineer the `FC92..FCA5` parameter block
+3. determine the meaning of:
+   - `92`
+   - `93`
+   - `94/95`
+   - `96/97`
+   - `A0`
+   - `A2`
+   - `A3`
+   - `A4`
+   - `AD`
+   - `AF`
+4. identify which values correspond to:
+   - X delta / target
+   - Z delta / target
+   - execute mode
+   - threading sync / spindle relation
+   - pass setup / retract / return
+5. implement those low-level binary commands from RP2040 code
+
+
+Most useful next steps
+----------------------
+
+1. Correlate each nonzero `94/95` and `96/97` write with the subsequent decoded X/Z move.
+2. Identify whether `94/95` and `96/97` are absolute targets or signed deltas.
+3. Work out the role of `93`, `A0`, `A2`, `A3`, `A4`, `AD`, and `AF`.
+4. Trace the ROM code path that emits the `do(...)` operations and find the routine that writes the `FC92..FCA5` block.
+5. Use one simple known move and one simple thread cycle to isolate each field experimentally.
+
+
+Confidence level
+----------------
+
+High confidence:
+
+- G-code is interpreted on the 6502 host, not uploaded to the lathe as raw G-code
+- `make.cap` shows lower-level binary command blocks, not program text
+- `96/97` very likely encode signed Z motion values
+- `94/95` very likely encode signed X motion values
+
+Moderate confidence:
+
+- `A0` is a command / execute / mode byte
+- the recurring `92=54`, `A2=FF`, `A3=7F`, `A4=01` block is part of the thread-pass primitive
+
+Lower confidence:
+
+- exact semantics of every register in `FC92..FCA5`
+- exact meanings of `FCAD` and `FCAF`
+
