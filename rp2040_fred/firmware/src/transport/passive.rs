@@ -8,12 +8,13 @@ use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
+use crate::decoder::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
 use crate::resources::{Core1Resources, DebugPin27Resources, DirectionResources, PioResources};
 use crate::transport::pio::passive::PassivePio;
 use crate::transport::GenericTransport;
-use rp2040_fred_firmware::{log_info, log_warn};
+use crate::{log_info, log_warn};
+
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
-use rp2040_fred_protocol::trace_decode::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
 
 const FLAG_ENABLED: u8 = 1 << 0;
 

@@ -19,7 +19,6 @@ pub enum MsgType {
     UnitCfg = 0x11,
     SnapshotReq = 0x12,
     CaptureSet = 0x13,
-    MockSet = 0x14,
     Ack = 0x80,
     Nack = 0x81,
     Telemetry = 0x90,
@@ -35,7 +34,6 @@ impl MsgType {
             0x11 => Some(Self::UnitCfg),
             0x12 => Some(Self::SnapshotReq),
             0x13 => Some(Self::CaptureSet),
-            0x14 => Some(Self::MockSet),
             0x80 => Some(Self::Ack),
             0x81 => Some(Self::Nack),
             0x90 => Some(Self::Telemetry),
@@ -183,11 +181,6 @@ impl Packet {
     pub fn capture_set(seq: u16, enable: bool) -> Self {
         let payload = [enable as u8];
         Self::new(MsgType::CaptureSet, seq, &payload).expect("valid capture_set")
-    }
-
-    pub fn mock_set(seq: u16, enable: bool) -> Self {
-        let payload = [enable as u8];
-        Self::new(MsgType::MockSet, seq, &payload).expect("valid mock_set")
     }
 
     pub fn ack(seq: u16, acked_type: MsgType, status: u8) -> Self {

@@ -2,13 +2,39 @@ use std::io;
 use std::time::Duration;
 
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-use rp2040_fred_protocol::trace_decode::{counts_to_mm, Calibration, DroSnapshot};
 
-use crate::transport::{HostTransport, UsbTransport};
+use crate::transport::UsbTransport;
 
-const DEFAULT_VID: u16 = 0x2E8A;
-const DEFAULT_PID: u16 = 0x000A;
 const IDLE_READ_TIMEOUT: Duration = Duration::from_millis(1000);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DroSnapshot {
+    pub x_counts: i32,
+    pub z_counts: i32,
+    pub rpm: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Calibration {
+    pub x_counts_per_mm: f32,
+    pub z_counts_per_mm: f32,
+}
+
+impl Default for Calibration {
+    fn default() -> Self {
+        Self {
+            x_counts_per_mm: 100.0,
+            z_counts_per_mm: 100.0,
+        }
+    }
+}
+
+pub fn counts_to_mm(snapshot: DroSnapshot, cal: Calibration) -> (f32, f32, u16) {
+    // CNCMAN uses diameter semantics for X (x*2), direct for Z.
+    let x_mm = ((snapshot.x_counts as f32) * 2.0) / cal.x_counts_per_mm;
+    let z_mm = (snapshot.z_counts as f32) / cal.z_counts_per_mm;
+    (x_mm, z_mm, snapshot.rpm)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonitorSnapshot {
@@ -68,10 +94,6 @@ pub struct FredMonitorClient {
 }
 
 impl FredMonitorClient {
-    pub fn open_default() -> io::Result<Self> {
-        Self::open(DEFAULT_VID, DEFAULT_PID)
-    }
-
     pub fn open(vid: u16, pid: u16) -> io::Result<Self> {
         Self::open_with_options(
             vid,

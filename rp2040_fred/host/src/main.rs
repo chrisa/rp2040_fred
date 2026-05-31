@@ -5,12 +5,8 @@ use std::io::BufReader;
 
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
-use fredctl::transport::{HostTransport, UsbTransport};
+use fredctl::transport::UsbTransport;
 use rp2040_fred_protocol::bridge_proto::Packet;
-use rp2040_fred_protocol::trace_decode::{
-    AxisSnapshot, FeedbackDecoder, FeedbackSnapshot, TraceCycle,
-};
-use rp2040_fred_protocol::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN};
 
 const MONITOR_STEP_WIDTH: usize = 10;
 const MONITOR_AXIS_WIDTH: usize = 12;
@@ -22,11 +18,7 @@ fn main() -> io::Result<()> {
     let mode = args.next().unwrap_or_default();
 
     match (cmd.as_str(), mode.as_str()) {
-        ("monitor-on", "usb") => set_usb_telemetry(true),
-        ("monitor-off", "usb") => set_usb_telemetry(false),
         ("monitor", "usb") => monitor_usb(),
-        ("capture-on", "usb") => set_usb_capture(true),
-        ("capture-off", "usb") => set_usb_capture(false),
         ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
@@ -46,16 +38,6 @@ fn main() -> io::Result<()> {
             })?;
             raw_capture_file(&path)
         }
-        ("decode", "usb") => decode_usb_capture(),
-        ("decode", "file") => {
-            let path = args.next().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "usage: fredctl decode file <capture.bin>",
-                )
-            })?;
-            decode_capture_file(&path)
-        }
         _ => {
             print_help();
             Ok(())
@@ -65,29 +47,10 @@ fn main() -> io::Result<()> {
 
 fn print_help() {
     eprintln!("usage:");
-    eprintln!("  fredctl monitor-on usb");
-    eprintln!("  fredctl monitor-off usb");
     eprintln!("  fredctl monitor usb");
-    eprintln!("  fredctl capture-on usb");
-    eprintln!("  fredctl capture-off usb");
     eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
-    eprintln!("  fredctl decode usb");
-    eprintln!("  fredctl decode file <capture.bin>");
-}
-
-fn set_usb_telemetry(enable: bool) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let _ = t.transact(Packet::capture_set(1, false))?;
-    let req = Packet::telemetry_set(2, enable, 100);
-    let replies = t.transact(req)?;
-    println!(
-        "usb telemetry {} -> {} reply packet(s)",
-        if enable { "ON" } else { "OFF" },
-        replies.len()
-    );
-    Ok(())
 }
 
 fn monitor_usb() -> io::Result<()> {
@@ -101,18 +64,6 @@ fn monitor_usb() -> io::Result<()> {
         print_monitor_snapshot(i, snapshot);
         i = i.wrapping_add(1);
     }
-}
-
-fn set_usb_capture(enable: bool) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let req = Packet::capture_set(1, enable);
-    let replies = t.transact(req)?;
-    println!(
-        "usb passive capture {} -> {} reply packet(s)",
-        if enable { "ON" } else { "OFF" },
-        replies.len()
-    );
-    Ok(())
 }
 
 fn capture_usb(options: CaptureUsbOptions) -> io::Result<()> {
@@ -146,42 +97,6 @@ fn capture_usb(options: CaptureUsbOptions) -> io::Result<()> {
             }
             Err(e) => {
                 eprintln!("{}", e);
-            }
-        }
-    }
-}
-
-fn decode_usb_capture() -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let _ = t.transact(Packet::telemetry_set(1, false, 100))?;
-    let _ = t.transact(Packet::capture_set(2, true))?;
-
-    let mut decoder = FeedbackDecoder::new();
-    let mut sample_index = 0u64;
-    let mut counters = TraceCaptureCounters::default();
-
-    print_decode_header();
-    loop {
-        let pkt = t.read_packet()?;
-        let Some(trace) = pkt.decode_trace_samples() else {
-            println!("no decoder samples");
-            continue;
-        };
-
-        if let Some(comment) =
-            counters.update(trace.dropped_samples_total, trace.rx_stall_count_total)
-        {
-            println!("{comment}");
-        }
-
-        for sample in trace.iter_samples() {
-            if let Some(cycle) = TraceCycle::from_sample(sample) {
-                if let Ok(snapshot) = decoder.ingest_cycle(sample_index, cycle) {
-                    print_decoded_snapshot(snapshot);
-                };
-                sample_index = sample_index.wrapping_add(1);
-            } else {
-                eprintln!("ignoring bad sample");
             }
         }
     }
@@ -229,32 +144,6 @@ fn raw_capture_file(path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn decode_capture_file(path: &str) -> io::Result<()> {
-    let file = File::open(path)?;
-    let mut reader = CaptureReader::new(BufReader::new(file))?;
-    let mut decoder = FeedbackDecoder::new();
-    let mut counters = TraceCaptureCounters::default();
-    let mut sample_index = 0u64;
-
-    print_decode_header();
-    while let Some(batch) = reader.read_batch()? {
-        if let Some(comment) =
-            counters.update(batch.dropped_samples_total, batch.rx_stall_count_total)
-        {
-            println!("{comment}");
-        }
-
-        for sample in batch.samples {
-            if let Ok(snapshot) = decoder.ingest_sample(sample_index, sample) {
-                print_decoded_snapshot(snapshot);
-            }
-            sample_index = sample_index.wrapping_add(1);
-        }
-    }
-
-    Ok(())
-}
-
 fn print_monitor_header() {
     println!(
         "{:<step_width$}  {:<axis_width$}  {:<axis_width$}  {:<rpm_width$}",
@@ -279,25 +168,6 @@ fn print_monitor_snapshot(step: usize, snapshot: MonitorSnapshot) {
         axis_width = MONITOR_AXIS_WIDTH,
         rpm_width = MONITOR_RPM_WIDTH,
     );
-}
-
-fn print_decode_header() {
-    println!("sample    X_raw    Z_raw    RPMraw RPMdisp");
-}
-
-fn print_decoded_snapshot(snapshot: FeedbackSnapshot) {
-    println!(
-        "{:08}  {}  {}  {:6} {:7}",
-        snapshot.sample_index,
-        format_axis(snapshot.x),
-        format_axis(snapshot.z),
-        snapshot.rpm_raw,
-        snapshot.rpm_display
-    );
-}
-
-fn format_axis(axis: AxisSnapshot) -> String {
-    format!("{}{:06}", if axis.negative { "-" } else { "+" }, axis.value)
 }
 
 #[derive(Default)]
@@ -366,6 +236,11 @@ struct RawSamplePrinter {
     last_emitted_step: Option<u64>,
 }
 
+// temporary! host should not know this stuff
+pub const ONE_MHZ_PIN: u8 = 16;
+pub const READ_WRITE_PIN: u8 = 17;
+pub const FRED_PIN: u8 = 18;
+
 impl RawSamplePrinter {
     fn new(options: RawPrintOptions) -> Self {
         Self {
@@ -409,50 +284,4 @@ impl RawSamplePrinter {
 
 fn sample_is_fcf0_read(sample: u32) -> bool {
     ((sample >> 8) & 0xFF) as u8 == 0xF0 && ((sample >> READ_WRITE_PIN) & 1) != 0
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io;
-
-    use super::{sample_is_fcf0_read, CaptureUsbOptions, RawPrintOptions, RawSamplePrinter};
-
-    fn sample(data: u8, addr: u8, read: bool) -> u32 {
-        (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | (1 << 17)
-    }
-
-    #[test]
-    fn parses_capture_usb_ignore_fcf0_flag() {
-        let options = CaptureUsbOptions::parse(vec!["--ignore-fcf0-reads".to_string()].into_iter())
-            .expect("options");
-        assert!(options.ignore_fcf0_reads);
-    }
-
-    #[test]
-    fn rejects_unknown_capture_usb_option() {
-        let error = CaptureUsbOptions::parse(vec!["--wat".to_string()].into_iter())
-            .expect_err("unknown option should fail");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn detects_fcf0_reads_only() {
-        assert!(sample_is_fcf0_read(sample(0xAA, 0xF0, true)));
-        assert!(!sample_is_fcf0_read(sample(0xAA, 0xF0, false)));
-        assert!(!sample_is_fcf0_read(sample(0xAA, 0xF1, true)));
-    }
-
-    #[test]
-    fn raw_printer_tracks_last_emitted_step_after_filtering() {
-        let mut printer = RawSamplePrinter::new(RawPrintOptions {
-            ignore_fcf0_reads: true,
-        });
-        assert_eq!(printer.last_emitted_step, None);
-
-        printer.print_sample(10, Some(1000), sample(0xAA, 0xF0, true));
-        assert_eq!(printer.last_emitted_step, None);
-
-        printer.print_sample(14, Some(1004), sample(0x55, 0x80, false));
-        assert_eq!(printer.last_emitted_step, Some(14));
-    }
 }

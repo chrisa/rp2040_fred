@@ -5,6 +5,7 @@
 mod resources;
 
 mod transport;
+mod decoder;
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
@@ -52,7 +53,6 @@ bind_interrupts!(pub struct PioIrqs {
 
 #[expect(dead_code, reason = "only one transport at a time")]
 enum TransportMode {
-    Mock,
     Passive,
     Master,
 }
@@ -66,7 +66,6 @@ async fn main(_spawner: Spawner) {
     let mode = TransportMode::Master;
 
     let mut transport: Transport = match mode {
-        TransportMode::Mock => Transport::Mock(transport::mock::MockTransport::new()),
         TransportMode::Passive => Transport::Passive(transport::passive::PassiveTransport::new(
             r.core1, r.pio, r.dir, r.debug27,
         )),

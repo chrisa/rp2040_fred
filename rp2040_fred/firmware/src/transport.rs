@@ -1,5 +1,4 @@
 pub mod master;
-pub mod mock;
 pub mod passive;
 
 mod pio;
@@ -8,7 +7,7 @@ use enum_dispatch::enum_dispatch;
 use rp2040_fred_protocol::bridge_proto::Packet;
 
 use crate::transport::{
-    master::BusMasterTransport, mock::MockTransport, passive::PassiveTransport,
+    master::BusMasterTransport, passive::PassiveTransport,
 };
 
 #[enum_dispatch]
@@ -22,7 +21,6 @@ pub trait GenericTransport {
 
 #[enum_dispatch(GenericTransport)]
 pub enum Transport {
-    Mock(MockTransport),
     Passive(PassiveTransport),
     Master(BusMasterTransport),
 }

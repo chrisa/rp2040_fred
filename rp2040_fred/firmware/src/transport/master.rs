@@ -15,10 +15,9 @@ use crate::resources::{
 use crate::transport::pio::master::ThisMasterPio;
 use crate::transport::pio::passive::PassivePio;
 use crate::transport::GenericTransport;
+use crate::decoder::{AxisSnapshot, FeedbackCommand, FeedbackDecoder, FeedbackSnapshot};
+
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
-use rp2040_fred_protocol::trace_decode::{
-    AxisSnapshot, FeedbackCommand, FeedbackDecoder, FeedbackSnapshot,
-};
 
 mod bus;
 use bus::Bus;

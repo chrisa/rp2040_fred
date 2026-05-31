@@ -1,12 +1,11 @@
 use std::io;
 use std::time::Duration;
 
-use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
+use fredctl::monitor::{FredMonitorClient, MonitorSnapshot, Calibration};
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
-use rp2040_fred_protocol::trace_decode::Calibration;
 
 create_exception!(_fred_native, FredProtocolError, PyRuntimeError);
 create_exception!(_fred_native, FredUsbError, PyRuntimeError);

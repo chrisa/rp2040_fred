@@ -1,6 +1,10 @@
 use assign_resources::assign_resources;
 use embassy_rp::{peripherals, Peri};
 
+pub const ONE_MHZ_PIN: u8 = 16;
+pub const READ_WRITE_PIN: u8 = 17;
+pub const FRED_PIN: u8 = 18;
+
 assign_resources! {
     core1: Core1Resources {
         core1: CORE1,
