@@ -8,7 +8,7 @@ use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use static_cell::StaticCell;
 
-use crate::decoder::{AxisSnapshot, FeedbackDecoder, FeedbackSnapshot};
+use crate::decoder::{FeedbackDecoder, FeedbackSnapshot};
 use crate::resources::{Core1Resources, DebugPin27Resources, DirectionResources, PioResources};
 use crate::transport::pio::passive::PassivePio;
 use crate::transport::GenericTransport;
@@ -79,19 +79,7 @@ impl PassiveTransport {
             packet_seq: 1,
             sample_seq: 0,
             decoder: FeedbackDecoder::new(),
-            current_snapshot: FeedbackSnapshot {
-                sample_index: 0,
-                x: AxisSnapshot {
-                    negative: false,
-                    value: 0,
-                },
-                z: AxisSnapshot {
-                    negative: false,
-                    value: 0,
-                },
-                rpm_display: 0,
-                rpm_raw: 0,
-            },
+            current_snapshot: FeedbackSnapshot::default(),
             snapshot_valid: false,
             telemetry_period_ms: 100,
             next_telemetry_due_ms: 0,
@@ -106,19 +94,7 @@ impl PassiveTransport {
         self.packet_seq = 1;
         self.sample_seq = 0;
         self.decoder = FeedbackDecoder::new();
-        self.current_snapshot = FeedbackSnapshot {
-            sample_index: 0,
-            x: AxisSnapshot {
-                negative: false,
-                value: 0,
-            },
-            z: AxisSnapshot {
-                negative: false,
-                value: 0,
-            },
-            rpm_display: 0,
-            rpm_raw: 0,
-        };
+        self.current_snapshot = FeedbackSnapshot::default();
         self.snapshot_valid = false;
         self.next_telemetry_due_ms = 0;
         TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
@@ -261,7 +237,7 @@ impl GenericTransport for PassiveTransport {
                 0,
                 self.current_snapshot.x.count(),
                 self.current_snapshot.z.count(),
-                self.current_snapshot.rpm_display,
+                self.current_snapshot.s.rpm(),
                 self.flags(),
             );
             self.packet_seq = self.packet_seq.wrapping_add(1);

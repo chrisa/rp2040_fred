@@ -15,7 +15,7 @@ use crate::resources::{
 use crate::transport::pio::master::ThisMasterPio;
 use crate::transport::pio::passive::PassivePio;
 use crate::transport::GenericTransport;
-use crate::decoder::{AxisSnapshot, FeedbackCommand, FeedbackDecoder, FeedbackSnapshot};
+use crate::decoder::{FeedbackCommand, FeedbackDecoder, FeedbackSnapshot};
 
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 
@@ -179,7 +179,7 @@ impl GenericTransport for BusMasterTransport {
                 0,
                 self.current_snapshot.x.count(),
                 self.current_snapshot.z.count(),
-                self.current_snapshot.rpm_display,
+                self.current_snapshot.s.rpm(),
                 self.flags(),
             );
             self.packet_seq = self.packet_seq.wrapping_add(1);
@@ -257,19 +257,7 @@ impl BusMasterTransport {
             telemetry_enabled: false,
             packet_seq: 1,
             decoder: FeedbackDecoder::new(),
-            current_snapshot: FeedbackSnapshot {
-                sample_index: 0,
-                x: AxisSnapshot {
-                    negative: false,
-                    value: 0,
-                },
-                z: AxisSnapshot {
-                    negative: false,
-                    value: 0,
-                },
-                rpm_display: 0,
-                rpm_raw: 0,
-            },
+            current_snapshot: FeedbackSnapshot::default(),
             snapshot_valid: false,
             telemetry_period_ms: 10,
             next_telemetry_due_ms: 0,
@@ -287,19 +275,7 @@ impl BusMasterTransport {
     fn reset_stream_state(&mut self) {
         self.packet_seq = 1;
         self.decoder = FeedbackDecoder::new();
-        self.current_snapshot = FeedbackSnapshot {
-            sample_index: 0,
-            x: AxisSnapshot {
-                negative: false,
-                value: 0,
-            },
-            z: AxisSnapshot {
-                negative: false,
-                value: 0,
-            },
-            rpm_display: 0,
-            rpm_raw: 0,
-        };
+        self.current_snapshot = FeedbackSnapshot::default();
         self.snapshot_valid = false;
         self.next_telemetry_due_ms = 0;
         COMMAND_DROP_COUNT.store(0, Ordering::Relaxed);

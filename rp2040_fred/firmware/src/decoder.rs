@@ -1,4 +1,7 @@
-use crate::resources::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN};
+use crate::{decoder::{axis::{AxisSnapshot, AxisState}, spindle::{SpindleSnapshot, SpindleState}}, resources::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN}};
+
+mod axis;
+mod spindle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
@@ -29,61 +32,17 @@ pub struct FeedbackSnapshot {
     pub sample_index: u64,
     pub x: AxisSnapshot,
     pub z: AxisSnapshot,
-    pub rpm_raw: u16,
-    pub rpm_display: u16,
+    pub s: SpindleSnapshot,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AxisSnapshot {
-    pub negative: bool,
-    pub value: u32,
-}
-
-impl AxisSnapshot {
-    pub fn count(&self) -> i32 {
-        if self.negative {
-            -(self.value as i32)
-        } else {
-            self.value as i32
+impl Default for FeedbackSnapshot {
+    fn default() -> Self {
+        Self {
+            sample_index: 0,
+            x: AxisSnapshot::default(),
+            z: AxisSnapshot::default(),
+            s: SpindleSnapshot::default(),
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct AxisState {
-    sign_seen: bool,
-    negative: bool,
-    pairs: [u8; 3],
-    pair_mask: u8,
-}
-
-impl AxisState {
-    fn set_sign(&mut self, response: u8) {
-        self.sign_seen = true;
-        self.negative = response != 0;
-    }
-
-    fn set_pair(&mut self, idx: usize, response: u8) {
-        if is_packed_bcd(response) {
-            self.pairs[idx] = response;
-            self.pair_mask |= 1 << idx;
-        } else {
-            self.pairs[idx] = 0;
-            self.pair_mask |= 1 << idx;
-        }
-    }
-
-    fn snapshot(&self) -> Option<AxisSnapshot> {
-        if !self.sign_seen || self.pair_mask != 0b111 {
-            return None;
-        }
-
-        Some(AxisSnapshot {
-            negative: self.negative,
-            value: bcd_pair_value(self.pairs[0]) * 10_000
-                + bcd_pair_value(self.pairs[1]) * 100
-                + bcd_pair_value(self.pairs[2]),
-        })
     }
 }
 
@@ -103,8 +62,7 @@ pub struct FeedbackDecoder {
     pending_cmd: Option<u8>,
     x: AxisState,
     z: AxisState,
-    rpm_pairs: [u8; 2],
-    rpm_mask: u8,
+    s: SpindleState,
 }
 
 impl Default for FeedbackDecoder {
@@ -114,23 +72,12 @@ impl Default for FeedbackDecoder {
 }
 
 impl FeedbackDecoder {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             pending_cmd: None,
-            x: AxisState {
-                sign_seen: false,
-                negative: false,
-                pairs: [0; 3],
-                pair_mask: 0,
-            },
-            z: AxisState {
-                sign_seen: false,
-                negative: false,
-                pairs: [0; 3],
-                pair_mask: 0,
-            },
-            rpm_pairs: [0; 2],
-            rpm_mask: 0,
+            x: AxisState::default(),
+            z: AxisState::default(),
+            s: SpindleState::default(),
         }
     }
 
@@ -168,32 +115,25 @@ impl FeedbackDecoder {
 
     pub fn ingest_command(&mut self, command: FeedbackCommand) -> Result<FeedbackSnapshot, &str> {
         match command.cmd {
-            0x03 => self.x.set_sign(command.value),
+            0x03 => {
+                self.x.reset();
+                self.x.set_sign(command.value);
+            },
             0x02 => self.x.set_pair(0, command.value),
             0x01 => self.x.set_pair(1, command.value),
             0x00 => self.x.set_pair(2, command.value),
-            0x07 => self.z.set_sign(command.value),
+            0x07 => {
+                self.z.reset();
+                self.z.set_sign(command.value);
+            },
             0x06 => self.z.set_pair(0, command.value),
             0x05 => self.z.set_pair(1, command.value),
             0x04 => self.z.set_pair(2, command.value),
             0x0D => {
-                if is_packed_bcd(command.value) {
-                    self.rpm_pairs[0] = command.value;
-                    self.rpm_mask |= 1 << 0;
-                } else {
-                    self.rpm_pairs[0] = 0;
-                    self.rpm_mask |= 1 << 0;
-                }
-            }
-            0x0C => {
-                if is_packed_bcd(command.value) {
-                    self.rpm_pairs[1] = command.value;
-                    self.rpm_mask |= 1 << 1;
-                } else {
-                    self.rpm_pairs[1] = 0;
-                    self.rpm_mask |= 1 << 1;
-                }
-            }
+                self.s.reset();
+                self.s.set_pair(0, command.value);
+            },
+            0x0C => self.s.set_pair(1, command.value),
             _ => {}
         }
 
@@ -210,10 +150,6 @@ impl FeedbackDecoder {
     }
 
     fn snapshot(&self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {
-        if self.rpm_mask != 0b11 {
-            return Err("incomplete RPM mask");
-        }
-
         let x = match self.x.snapshot() {
             Some(x) => x,
             None => {
@@ -226,15 +162,18 @@ impl FeedbackDecoder {
                 return Err("no z snapshot");
             }
         };
-        let rpm_raw =
-            (bcd_pair_value(self.rpm_pairs[0]) * 100 + bcd_pair_value(self.rpm_pairs[1])) as u16;
+        let s = match self.s.snapshot() {
+            Some(s) => s,
+            None => {
+                return Err("no spindle snapshot");
+            }
+        };
 
         Ok(FeedbackSnapshot {
             sample_index,
             x,
             z,
-            rpm_raw,
-            rpm_display: (rpm_raw / 10) * 10,
+            s,
         })
     }
 }
