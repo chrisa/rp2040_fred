@@ -65,8 +65,8 @@ out pins, 8           side 0b01 ; zeros to bus
 pull block            side 0 ; read from fifo
 irq wait 0            side 0 ; wait for interrupt from control
 out pindirs, 8        side 0 ; set data bus to write
-irq wait 2            side 1 ; wait for post-high irq
 out pins, 8           side 1 ; write data
+irq wait 2            side 1 ; hold data until post-high irq
 irq wait 3       [1]  side 1 ; wait for end of cycle; delay for t_dhw
 out pins, 8      [3]  side 1 ; deassert data bus; delay to force output to 0v.
 out pindirs, 8        side 0 ; deassert direction pin and switch bus back to read

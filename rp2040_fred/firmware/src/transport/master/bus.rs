@@ -17,14 +17,10 @@ impl<'a> Bus<'a> {
     }
 
     pub async fn poll_until(&mut self, addr: u8, mask: u8) {
-        let addr_payload = 0x0001_0000_u32 | (u32::from(addr) << 24);
-        self.pio.read.clear_fifos();
         loop {
-            self.pio.control.tx().wait_push(addr_payload).await;
-            if let Some(r) = self.pio.read.rx().try_pull() {
-                if (r as u8) & mask == 0 {
-                    break;
-                }
+            let r = self.read_cycle(addr).await;
+            if r & mask == 0 {
+                break;
             }
         }
     }
