@@ -371,6 +371,8 @@ async fn capture_core1_loop(
 }
 
 const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
+const RPM_TRIGGER_ADDR: u8 = 0x88;
+const RPM_TRIGGER_LOOP_INTERVAL: u8 = 30;
 
 #[embassy_executor::task]
 async fn core1_loop(
@@ -382,6 +384,7 @@ async fn core1_loop(
     let pio = ThisMasterPio::setup(pio_resources, dir_resources.pin_19, debug_resources.pin);
     let mut bus = Bus { pio };
     let mut index = 0;
+    let mut rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
 
     // address data-dir high for output.
     let mut dir_a = Output::new(dir_resources.pin_20, Level::High);
@@ -403,6 +406,14 @@ async fn core1_loop(
                 COMMAND_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
             }
             index += 1;
+        }
+
+        if rpm_trigger_countdown <= 1 {
+            Timer::after(Duration::from_nanos(50)).await;
+            bus.read_write_zero_pair(RPM_TRIGGER_ADDR).await;
+            rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+        } else {
+            rpm_trigger_countdown -= 1;
         }
     }
 }

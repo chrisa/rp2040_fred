@@ -16,6 +16,11 @@ impl<'a> Bus<'a> {
         return self.read_cycle(0xF1).await;
     }
 
+    pub async fn read_write_zero_pair(&mut self, addr: u8) {
+        self.read_cycle(addr).await;
+        self.write_cycle(addr, 0x00).await;
+    }
+
     pub async fn poll_until(&mut self, addr: u8, mask: u8) {
         loop {
             let r = self.read_cycle(addr).await;
