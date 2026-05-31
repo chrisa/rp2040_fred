@@ -50,11 +50,16 @@ pub struct FeedbackCommand {
     pub index: u64,
     pub cmd: u8,
     pub value: u8,
+    pub rpm_trigger: bool,
 }
 
 impl FeedbackCommand {
-    pub fn from_bytes(index: u64, cmd: u8, value: u8) -> Self {
-        Self { cmd, value, index }
+    pub fn from_master(index: u64, cmd: u8, value: u8, rpm_trigger: bool) -> Self {
+        Self { cmd, value, index, rpm_trigger }
+    }
+
+    pub fn from_cycle(index: u64, cmd: u8, value: u8) -> Self {
+        Self { cmd, value, index, rpm_trigger: false }
     }
 }
 
@@ -63,6 +68,7 @@ pub struct FeedbackDecoder {
     x: AxisState,
     z: AxisState,
     s: SpindleState,
+    last_s: SpindleSnapshot,
 }
 
 impl Default for FeedbackDecoder {
@@ -78,6 +84,7 @@ impl FeedbackDecoder {
             x: AxisState::default(),
             z: AxisState::default(),
             s: SpindleState::default(),
+            last_s: SpindleSnapshot::default(),
         }
     }
 
@@ -107,7 +114,7 @@ impl FeedbackDecoder {
         }
 
         if let Some(cmd) = self.pending_cmd.take() {
-            self.ingest_command(FeedbackCommand::from_bytes(sample_index, cmd, cycle.data))
+            self.ingest_command(FeedbackCommand::from_cycle(sample_index, cmd, cycle.data))
         } else {
             Err("no pending_cmd")
         }
@@ -137,6 +144,10 @@ impl FeedbackDecoder {
             _ => {}
         }
 
+        if command.rpm_trigger {
+            self.s.trigger();
+        }
+
         if command.cmd != 0x0C {
             return Err("no 0x0C yet");
         }
@@ -149,7 +160,7 @@ impl FeedbackDecoder {
         }
     }
 
-    fn snapshot(&self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {
+    fn snapshot(&mut self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {
         let x = match self.x.snapshot() {
             Some(x) => x,
             None => {
@@ -164,10 +175,10 @@ impl FeedbackDecoder {
         };
         let s = match self.s.snapshot() {
             Some(s) => s,
-            None => {
-                return Err("no spindle snapshot");
-            }
+            None => self.last_s,
         };
+
+        self.last_s = s;
 
         Ok(FeedbackSnapshot {
             sample_index,

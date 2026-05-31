@@ -25,6 +25,7 @@ impl SpindleSnapshot {
 pub(crate) struct SpindleState {
     rpm_pairs: [u8; 2],
     rpm_mask: u8,
+    count: usize,
 }
 
 impl Default for SpindleState {
@@ -32,6 +33,7 @@ impl Default for SpindleState {
         Self {
             rpm_pairs: [0; 2],
             rpm_mask: 0,
+            count: 0,
         }
     }
 }
@@ -41,10 +43,15 @@ impl SpindleState {
         self.rpm_mask = 0;
     }
 
+    pub fn trigger(&mut self) {
+        self.count = 0;
+    }
+
     pub fn set_pair(&mut self, idx: usize, response: u8) {
         if is_packed_bcd(response) {
             self.rpm_pairs[idx] = response;
             self.rpm_mask |= 1 << idx;
+            self.count += 1;
         } else {
             self.rpm_pairs[idx] = 0;
             self.rpm_mask |= 1 << idx;
@@ -53,6 +60,11 @@ impl SpindleState {
 
     pub fn snapshot(&self) -> Option<SpindleSnapshot> {
         if self.rpm_mask != 0b11 {
+            return None;
+        }
+
+        // only return a spindle snapshot after ten values
+        if self.count < 10 {
             return None;
         }
 

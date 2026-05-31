@@ -375,7 +375,7 @@ async fn core1_loop(
             Timer::after(Duration::from_nanos(50)).await;
             let value = bus.command_cycle(cmd).await;
             if commands
-                .enqueue(FeedbackCommand::from_bytes(index, cmd, value))
+                .enqueue(FeedbackCommand::from_master(index, cmd, value, rpm_trigger_countdown <= 1))
                 .is_err()
             {
                 COMMAND_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
