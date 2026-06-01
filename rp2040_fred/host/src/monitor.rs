@@ -171,9 +171,8 @@ impl FredMonitorClient {
 
 #[cfg(test)]
 mod tests {
-    use super::MonitorSnapshot;
+    use super::{Calibration, MonitorSnapshot};
     use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
-    use rp2040_fred_protocol::trace_decode::Calibration;
 
     #[test]
     fn telemetry_packet_decodes_to_monitor_snapshot() {

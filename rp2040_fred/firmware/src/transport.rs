@@ -6,9 +6,7 @@ mod pio;
 use enum_dispatch::enum_dispatch;
 use rp2040_fred_protocol::bridge_proto::Packet;
 
-use crate::transport::{
-    master::BusMasterTransport, passive::PassiveTransport,
-};
+use crate::transport::{master::BusMasterTransport, passive::PassiveTransport};
 
 #[enum_dispatch]
 pub trait GenericTransport {

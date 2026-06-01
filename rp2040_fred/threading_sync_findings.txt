@@ -78,7 +78,7 @@ Relevant code shape
 - write `m%(1)`, `m%(2)` as bytes
 - write `m%(3)`..`m%(9)` as 16-bit words
 - write `m%(10)` as two 16-bit words
-- then write zero to `&AF`
+- after the resulting busy/ready cycle completes, write zero to `&AF`
 
 This maps directly onto the bus register block:
 - `FC92`   = `m1`
@@ -92,7 +92,7 @@ This maps directly onto the bus register block:
 - `FCA0/A1` = `m9`
 - `FCA2/A3` = low 16 bits of `m10`
 - `FCA4/A5` = high 16 bits of `m10`
-- `FCAF`    = trailing zero write after block load
+- `FCAF`    = post-command clear / acknowledgement after the controller returns ready
 
 Important correction
 - `FCA0=3D` is not an execute opcode.
@@ -150,8 +150,10 @@ Implication
 
 Helper Register Decode
 - `FCAF`
-  - `do(...)` writes zero to `&AF` after loading the parameter block.
-  - So the repeated `FCAF=00` activity in the trace is part of block submission / trailing strobe.
+  - Earlier notes treated this as a block-submit strobe.
+  - `make.raw` shows a different sequence: `FC92..FCA5` load, `FC80=00`, extended `FCF0` busy interval, `FCF1` read, then `FCAF=00`.
+  - `disk/CNCMAK1.decoded.txt` confirms the ordering in `PROCdo`: write the block, call `busy`, then write `&AF=0`.
+  - So `FCAF=00` is more likely a post-command clear / acknowledgement than the initial execute trigger.
 - `FCAD`
   - `SPEED` writes zero to `&AD`.
   - So `FCAD=00` is tied to the separate speed-trigger/read path, not to the thread-pass parameter payload itself.
@@ -178,6 +180,10 @@ Turret / Tool Change
 - The turret path is host-driven and uses the current tool position `C%` plus the requested tool `K`.
 - The BASIC/ROM logic computes a relative step count `num` from `C%` and `Q%=K`.
 - That means the user-facing intent is absolute tool selection ("go to tool N"), but the machine motion is expressed as a relative turret rotation.
+- At program startup, CNCMAK1 line 80 sets `C%=K` when the first line has a nonzero turret station.
+  This appears to initialize the host's idea of the current turret station; it does not itself emit a bus command.
+- Line 90 updates `?&910=I` / `*PLONKT` for the tool number display when `I>1`.
+  This is also host/display-side evidence rather than an observed controller command.
 - The ROM help text explicitly distinguishes the two concepts for `M06`:
   - `I = TOOL No`
   - `K = Turret No`
@@ -187,12 +193,14 @@ Turret / Tool Change
   - coarse rotation
   - fine alignment
   - settle
-- The capture shows this family as nonzero payloads in the `FC98/99` slot, with the surrounding fields used for timing/speed.
+- `CNCMAK1` maps the turret movement count through `m5`, i.e. the `FC98/99` slot, with the surrounding fields used for timing/speed.
 - There is no separate "go to next" bus command in the evidence so far.
 - The acknowledgement is the normal motion handshake:
   - host waits on `FCF0` ready/busy
   - once the move completes, the host updates `C%=Q%`
 - So from the wire's perspective, the turret is "move by a relative amount to reach the requested tool", not "advance one station" as a dedicated opcode.
+- In `make.raw`, this specific manufacturing run does not show the automatic turret `m5` sequence at startup.
+  It does show a single `do(0,5,...)` near the end, consistent with the spindle-stop / manual-tool-change style path.
 
 
 Annotated Thread Pass
@@ -335,3 +343,102 @@ Current Best Model
   - covers fed X/Z moves and likely auxiliary timed moves such as turret indexing
 - `opcode 84`:
   - synchronized thread-pass family
+
+
+G00 / G01 CommandBlock Candidate
+--------------------------------
+
+Naming
+- The shared host/firmware payload should be called a `CommandBlock`, not a motion-only block.
+- The same `FC92..FCA5` shape covers motion primitives now and likely non-axis operations later, such as turret/tool-change sequences.
+- It is also not a raw G-code block: the BBC host parsed G-code and emitted lower-level `do(...)` command blocks.
+
+Payload size
+- The `FC92..FCA5` payload is 20 bytes:
+  - `m1`, `m2` as single bytes
+  - `m3`..`m9` as seven 16-bit little-endian words
+  - `m10` as one 32-bit little-endian value
+- `FCAF=00` is not part of the initial payload submission.
+- In `make.raw`, it follows completion of a `FC80=00` busy/ready cycle after the block load.
+- In `CNCMAK1.decoded.txt`, `PROCbusy` waits on `R(&F0)` mask `&800000`.
+  In the direct captured byte stream this corresponds to the `FCF0` low-bit transition seen as `3D` busy to `3C` ready.
+
+Candidate G00 rapid / reposition block
+- Low-level form:
+  - `do(0,0,x_delta,z_delta,0,0,0,0,slew_limit,0)`
+- Register form:
+  - `FC92 = 00`
+  - `FC93 = 00`
+  - `FC94/95 = X delta`
+  - `FC96/97 = Z delta`
+  - `FC98..9F = 0`
+  - `FCA0/A1 = slew_limit`
+  - `FCA2..A5 = 0`
+  - `FC80 = 00` starts the command-block busy/ready cycle
+  - after `FCF0` returns ready and `FCF1` is read, `FCAF = 00` clears/acknowledges the command
+- X remains special:
+  - host/user-facing X uses diameter semantics
+  - controller payload uses radius counts
+  - therefore host X diameter deltas must be halved before writing `m3`
+
+Candidate G01 straight feed block
+- Low-level form:
+  - `do(1,0,x_delta,z_delta,0,0,0,feed_timing,slew_limit,0)`
+- Feed timing:
+  - `feed_timing = INT(95000 / F)`
+- Register form:
+  - `FC92 = 01`
+  - `FC93 = 00`
+  - `FC94/95 = X radius delta`
+  - `FC96/97 = Z delta`
+  - `FC98..9D = 0`
+  - `FC9E/9F = feed_timing`
+  - `FCA0/A1 = slew_limit`
+  - `FCA2..A5 = 0`
+  - `FC80 = 00` starts the command-block busy/ready cycle
+  - after `FCF0` returns ready and `FCF1` is read, `FCAF = 00` clears/acknowledges the command
+
+Implementation implication
+- Replacement host code can first expose low-level single-block sending:
+  - rapid maps to opcode `0`
+  - straight feed maps to opcode `1`
+- Full G-code parsing, arcs, canned cycles, threading expansion, and tool-change generation can build on the same `CommandBlock` path later.
+
+Validation still needed
+- Confirm safe/default values for `slew_limit` / `SSL`.
+- Confirm G01 `INT(95000/F)` timing with a controlled slow Z-only physical move.
+- Capture the emitted bus sequence for small G00/G01 trials and compare against the register map above.
+
+
+Cycle Start / Interlock Candidate
+---------------------------------
+
+Source
+- `disk/CNCMAK1.decoded.txt` line 110 displays `PRESS START CYCLE`.
+- Just before that prompt, line 100 sends:
+  - `do(0,0,XX,0,0,0,0,0,0,0)`
+  - `do(0,0,0,Z,0,0,0,0,0,0)`
+- The immediately following call is `PROCcont`.
+
+Current interpretation
+- Those two pre-prompt blocks are part of the cycle-start setup path, even though they look like ordinary X/Z rapid-position blocks.
+- Treating `arm` as only a status wait is therefore incomplete.
+- `PROCcont` samples `R(&F0)` and waits on two status-mask phases:
+  - `&200000`
+  - `&100000`
+- This looks like an operator cycle-start / running-state interlock rather than part of each low-level motion block.
+- `PROCdo` itself does not wait for those masks; it writes the `FC92..FCA5` block, runs the normal busy wait, then writes `FCAF=00`.
+- Physical test note:
+  - The current `PROCcont` mask mapping has an effect on the controller, but it did not complete under observed button presses.
+  - Firmware now treats `PROCcont` as an experiment with a timeout/error flag rather than an unbounded wait, so failed trials should not permanently strand feedback polling.
+  - `arm-wait usb --suspend-polling` is available to test the old-host-like no-position-polling path explicitly.
+
+Implementation implication
+- Command-block sequencing:
+  - payload
+  - `FC80=00`
+  - wait for `FCF0` ready
+  - read `FCF1`
+  - `FCAF=00`
+- Host-side `arm` should queue the two pre-prompt `do(0,0,...)` blocks, then queue the `PROCcont` wait.
+- If the `XX` / `Z` values are not yet known for an experiment, send zero deltas first to test whether the setup side effect is independent of the visible move distance.

@@ -9,24 +9,29 @@ use portable_atomic::{AtomicBool, AtomicU32, Ordering};
 use rp2040_fred_firmware::{log_info, log_warn};
 use static_cell::StaticCell;
 
+use crate::decoder::{FeedbackCommand, FeedbackDecoder, FeedbackSnapshot};
 use crate::resources::{
     Core1Resources, DebugPin27Resources, DebugPin28Resources, DirectionResources, PioResources,
 };
 use crate::transport::pio::master::ThisMasterPio;
 use crate::transport::pio::passive::PassivePio;
 use crate::transport::GenericTransport;
-use crate::decoder::{FeedbackCommand, FeedbackDecoder, FeedbackSnapshot};
 
-use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
+use rp2040_fred_protocol::bridge_proto::{
+    CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
+    TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY, TELEMETRY_FLAG_CONTROLLER_ERROR,
+    TELEMETRY_FLAG_ENABLED, TRACE_SAMPLES_PER_PACKET,
+};
 
 mod bus;
 use bus::Bus;
 
-const FLAG_ENABLED: u8 = 1 << 0;
-
 const TRACE_SAMPLE_RING_LEN: usize = 16_384;
 const COMMAND_RING_LEN: usize = 256;
+const CONTROLLER_WORK_RING_LEN: usize = 16;
 const CORE1_STACK_SIZE: usize = 4096;
+const PROC_CONT_TIMEOUT: Duration = Duration::from_secs(30);
+const COMMAND_BLOCK_TIMEOUT: Duration = Duration::from_secs(120);
 
 static TRACE_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
 static TRACE_QUEUE_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -34,12 +39,22 @@ static TRACE_RXSTALL_COUNT: AtomicU32 = AtomicU32::new(0);
 static TRACE_SAMPLE_RING: StaticCell<Queue<u32, TRACE_SAMPLE_RING_LEN>> = StaticCell::new();
 static COMMAND_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
 static COMMAND_RING: StaticCell<Queue<FeedbackCommand, COMMAND_RING_LEN>> = StaticCell::new();
+static CONTROLLER_WORK_PENDING_COUNT: AtomicU32 = AtomicU32::new(0);
+static POLLING_SUSPEND_PENDING_COUNT: AtomicU32 = AtomicU32::new(0);
+static CONTROLLER_WORK_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CONTROLLER_WORK_CLEAR_REQUEST: AtomicBool = AtomicBool::new(false);
+static CONTROLLER_BUSY: AtomicBool = AtomicBool::new(false);
+static CONTROLLER_ERROR: AtomicBool = AtomicBool::new(false);
+static POSITION_POLLING_SUSPENDED: AtomicBool = AtomicBool::new(false);
+static CONTROLLER_WORK_RING: StaticCell<Queue<ControllerWork, CONTROLLER_WORK_RING_LEN>> =
+    StaticCell::new();
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
 pub struct BusMasterTransport {
     trace_samples: Consumer<'static, u32>,
     commands: Consumer<'static, FeedbackCommand>,
+    controller_work: Producer<'static, ControllerWork>,
     capture_enabled: bool,
     telemetry_enabled: bool,
     packet_seq: u16,
@@ -48,6 +63,21 @@ pub struct BusMasterTransport {
     snapshot_valid: bool,
     telemetry_period_ms: u16,
     next_telemetry_due_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControllerWork {
+    ArmWait { suspend_polling: bool },
+    CommandBlock(CommandBlockRequest),
+}
+
+impl ControllerWork {
+    fn suspends_polling(self) -> bool {
+        match self {
+            Self::ArmWait { suspend_polling } => suspend_polling,
+            Self::CommandBlock(request) => request.suspend_polling() || request.arm_wait(),
+        }
+    }
 }
 
 impl GenericTransport for BusMasterTransport {
@@ -66,6 +96,9 @@ impl GenericTransport for BusMasterTransport {
                     self.capture_enabled = req.payload[0] != 0;
                     TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
                     self.reset_stream_state();
+                    if self.capture_enabled {
+                        CONTROLLER_WORK_CLEAR_REQUEST.store(true, Ordering::Relaxed);
+                    }
                     out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
                     log_info!(
                         "telemetry_enabled: {} capture_enabled: {}",
@@ -83,6 +116,9 @@ impl GenericTransport for BusMasterTransport {
                     self.telemetry_enabled = req.payload[0] != 0;
                     TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
                     self.reset_stream_state();
+                    if self.capture_enabled {
+                        CONTROLLER_WORK_CLEAR_REQUEST.store(true, Ordering::Relaxed);
+                    }
                     if req.payload_len >= 3 {
                         self.telemetry_period_ms =
                             u16::from_le_bytes([req.payload[1], req.payload[2]]);
@@ -94,6 +130,69 @@ impl GenericTransport for BusMasterTransport {
                         self.capture_enabled
                     );
                 }
+                1
+            }
+            MsgType::CommandBlock => {
+                let Some(request) = req.decode_command_block_request() else {
+                    out[0] = Packet::nack(req.seq, MsgType::CommandBlock as u8, 1);
+                    return 1;
+                };
+
+                if self.capture_enabled {
+                    out[0] = Packet::nack(req.seq, MsgType::CommandBlock as u8, 0x10);
+                    log_warn!("nacked CommandBlock (capture enabled)");
+                    return 1;
+                }
+
+                let work = ControllerWork::CommandBlock(request);
+                if self.controller_work.enqueue(work).is_err() {
+                    out[0] = Packet::nack(req.seq, MsgType::CommandBlock as u8, 0x12);
+                    log_warn!("nacked CommandBlock (queue full)");
+                    return 1;
+                }
+
+                enqueue_controller_work(work.suspends_polling());
+                if work.suspends_polling() {
+                    self.reset_position_polling_state();
+                }
+                out[0] = Packet::ack(req.seq, MsgType::CommandBlock, 0);
+                log_info!("queued CommandBlock");
+                1
+            }
+            MsgType::ControllerAction => {
+                let Some(action_request) = req.decode_controller_action_request() else {
+                    out[0] = Packet::nack(req.seq, MsgType::ControllerAction as u8, 1);
+                    return 1;
+                };
+
+                if self.capture_enabled {
+                    out[0] = Packet::nack(req.seq, MsgType::ControllerAction as u8, 0x10);
+                    log_warn!("nacked ControllerAction (capture enabled)");
+                    return 1;
+                }
+
+                let work = match action_request.action {
+                    ControllerAction::ArmWait => ControllerWork::ArmWait {
+                        suspend_polling: action_request.suspend_polling(),
+                    },
+                };
+
+                if self.controller_work.enqueue(work).is_err() {
+                    out[0] = Packet::nack(req.seq, MsgType::ControllerAction as u8, 0x12);
+                    log_warn!("nacked ControllerAction (queue full)");
+                    return 1;
+                }
+
+                enqueue_controller_work(work.suspends_polling());
+                if work.suspends_polling() {
+                    self.reset_position_polling_state();
+                }
+                out[0] = Packet::ack(req.seq, MsgType::ControllerAction, 0);
+                log_info!("queued ControllerAction");
+                1
+            }
+            MsgType::ControllerStatusReq => {
+                out[0] = Packet::controller_status_ack(req.seq, self.controller_status());
                 1
             }
             _ => {
@@ -216,10 +315,20 @@ impl BusMasterTransport {
         let command_ring = COMMAND_RING.init(Queue::new());
         let (command_producer, command_consumer) = command_ring.split();
 
+        let controller_work_ring = CONTROLLER_WORK_RING.init(Queue::new());
+        let (controller_work_producer, controller_work_consumer) = controller_work_ring.split();
+
         TRACE_CAPTURE_ENABLED.store(false, Ordering::Relaxed);
         TRACE_QUEUE_DROP_COUNT.store(0, Ordering::Relaxed);
         TRACE_RXSTALL_COUNT.store(0, Ordering::Relaxed);
         COMMAND_DROP_COUNT.store(0, Ordering::Relaxed);
+        CONTROLLER_WORK_PENDING_COUNT.store(0, Ordering::Relaxed);
+        POLLING_SUSPEND_PENDING_COUNT.store(0, Ordering::Relaxed);
+        CONTROLLER_WORK_ACTIVE.store(false, Ordering::Relaxed);
+        CONTROLLER_WORK_CLEAR_REQUEST.store(false, Ordering::Relaxed);
+        CONTROLLER_BUSY.store(false, Ordering::Relaxed);
+        CONTROLLER_ERROR.store(false, Ordering::Relaxed);
+        POSITION_POLLING_SUSPENDED.store(false, Ordering::Relaxed);
 
         // SAFETY: capture only reads these pins
         let capture_pio_resources = unsafe { clone_capture_resources(&pio_resources) };
@@ -240,6 +349,7 @@ impl BusMasterTransport {
                         dir_resources,
                         debug28_resources,
                         command_producer,
+                        controller_work_consumer,
                     )
                     .expect("spawn core1_loop"),
                 );
@@ -253,6 +363,7 @@ impl BusMasterTransport {
         Self {
             trace_samples: trace_consumer,
             commands: command_consumer,
+            controller_work: controller_work_producer,
             capture_enabled: false,
             telemetry_enabled: false,
             packet_seq: 1,
@@ -285,12 +396,39 @@ impl BusMasterTransport {
         self.clear_trace_samples();
     }
 
-    fn flags(&self) -> u8 {
-        if self.telemetry_enabled {
-            FLAG_ENABLED
-        } else {
-            0
+    fn reset_position_polling_state(&mut self) {
+        self.decoder = FeedbackDecoder::new();
+        self.current_snapshot = FeedbackSnapshot::default();
+        self.snapshot_valid = false;
+        self.next_telemetry_due_ms = 0;
+        COMMAND_DROP_COUNT.store(0, Ordering::Relaxed);
+        self.clear_commands();
+    }
+
+    fn controller_status(&self) -> ControllerStatus {
+        ControllerStatus {
+            flags: self.flags(),
+            pending_count: CONTROLLER_WORK_PENDING_COUNT.load(Ordering::Relaxed),
         }
+    }
+
+    fn flags(&self) -> u8 {
+        let mut flags = 0;
+        if self.telemetry_enabled {
+            flags |= TELEMETRY_FLAG_ENABLED;
+        }
+        if CONTROLLER_BUSY.load(Ordering::Relaxed) {
+            flags |= TELEMETRY_FLAG_CONTROLLER_BUSY;
+        }
+        if CONTROLLER_ERROR.load(Ordering::Relaxed) {
+            flags |= TELEMETRY_FLAG_CONTROLLER_ERROR;
+        }
+        if CONTROLLER_WORK_PENDING_COUNT.load(Ordering::Relaxed) != 0
+            || CONTROLLER_WORK_ACTIVE.load(Ordering::Relaxed)
+        {
+            flags |= TELEMETRY_FLAG_COMMAND_ACTIVE;
+        }
+        flags
     }
 }
 
@@ -346,6 +484,7 @@ async fn capture_core1_loop(
 }
 
 const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
+const COMMAND_BLOCK_EXECUTE_CMD: u8 = 0x00;
 const RPM_TRIGGER_ADDR: u8 = 0x88;
 const RPM_TRIGGER_LOOP_INTERVAL: u8 = 30;
 
@@ -355,6 +494,7 @@ async fn core1_loop(
     dir_resources: DirectionResources,
     debug_resources: DebugPin28Resources,
     mut commands: Producer<'static, FeedbackCommand>,
+    mut controller_work: Consumer<'static, ControllerWork>,
 ) -> ! {
     let pio = ThisMasterPio::setup(pio_resources, dir_resources.pin_19, debug_resources.pin);
     let mut bus = Bus { pio };
@@ -370,17 +510,86 @@ async fn core1_loop(
     dir_c.set_high();
 
     loop {
+        if CONTROLLER_WORK_CLEAR_REQUEST.swap(false, Ordering::Relaxed) {
+            while controller_work.dequeue().is_some() {}
+            CONTROLLER_WORK_PENDING_COUNT.store(0, Ordering::Relaxed);
+            POLLING_SUSPEND_PENDING_COUNT.store(0, Ordering::Relaxed);
+            CONTROLLER_ERROR.store(false, Ordering::Relaxed);
+            POSITION_POLLING_SUSPENDED.store(false, Ordering::Relaxed);
+        }
+
+        if let Some(work) = controller_work.dequeue() {
+            let suspends_polling = work.suspends_polling();
+            decrement_controller_work_pending_count();
+            if suspends_polling {
+                decrement_polling_suspend_pending_count();
+                POSITION_POLLING_SUSPENDED.store(true, Ordering::Relaxed);
+            }
+            CONTROLLER_WORK_ACTIVE.store(true, Ordering::Relaxed);
+            CONTROLLER_BUSY.store(true, Ordering::Relaxed);
+            match work {
+                ControllerWork::ArmWait { .. } => {
+                    if !bus.wait_proc_cont(PROC_CONT_TIMEOUT).await {
+                        CONTROLLER_ERROR.store(true, Ordering::Relaxed);
+                        log_warn!("PROCcont wait timed out");
+                    }
+                }
+                ControllerWork::CommandBlock(request) => {
+                    let mut run_block = true;
+                    if request.arm_wait() {
+                        run_block = bus.wait_proc_cont(PROC_CONT_TIMEOUT).await;
+                        if !run_block {
+                            CONTROLLER_ERROR.store(true, Ordering::Relaxed);
+                            log_warn!("PROCcont wait timed out before CommandBlock");
+                        }
+                    }
+                    if run_block {
+                        bus.write_command_block(request.block).await;
+                        Timer::after(Duration::from_nanos(50)).await;
+                        if bus
+                            .command_cycle_timeout(COMMAND_BLOCK_EXECUTE_CMD, COMMAND_BLOCK_TIMEOUT)
+                            .await
+                            .is_some()
+                        {
+                            bus.clear_command_block().await;
+                        } else {
+                            CONTROLLER_ERROR.store(true, Ordering::Relaxed);
+                            log_warn!("CommandBlock execute cycle timed out");
+                        }
+                    }
+                }
+            }
+            CONTROLLER_BUSY.store(false, Ordering::Relaxed);
+            CONTROLLER_WORK_ACTIVE.store(false, Ordering::Relaxed);
+            if POLLING_SUSPEND_PENDING_COUNT.load(Ordering::Relaxed) == 0 {
+                POSITION_POLLING_SUSPENDED.store(false, Ordering::Relaxed);
+            }
+            continue;
+        }
+
         Timer::after(Duration::from_millis(10)).await;
         for cmd in CMD_SEQUENCE {
+            if POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed) {
+                break;
+            }
             Timer::after(Duration::from_nanos(50)).await;
             let value = bus.command_cycle(cmd).await;
             if commands
-                .enqueue(FeedbackCommand::from_master(index, cmd, value, rpm_trigger_countdown <= 1))
+                .enqueue(FeedbackCommand::from_master(
+                    index,
+                    cmd,
+                    value,
+                    rpm_trigger_countdown <= 1,
+                ))
                 .is_err()
             {
                 COMMAND_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
             }
             index += 1;
+        }
+
+        if POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed) {
+            continue;
         }
 
         if rpm_trigger_countdown <= 1 {
@@ -389,6 +598,47 @@ async fn core1_loop(
             rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
         } else {
             rpm_trigger_countdown -= 1;
+        }
+    }
+}
+
+fn enqueue_controller_work(suspends_polling: bool) {
+    CONTROLLER_ERROR.store(false, Ordering::Relaxed);
+    CONTROLLER_WORK_PENDING_COUNT.fetch_add(1, Ordering::Relaxed);
+    if suspends_polling {
+        POLLING_SUSPEND_PENDING_COUNT.fetch_add(1, Ordering::Relaxed);
+        POSITION_POLLING_SUSPENDED.store(true, Ordering::Relaxed);
+    }
+}
+
+fn decrement_controller_work_pending_count() {
+    loop {
+        let count = CONTROLLER_WORK_PENDING_COUNT.load(Ordering::Relaxed);
+        if count == 0 {
+            return;
+        }
+
+        if CONTROLLER_WORK_PENDING_COUNT
+            .compare_exchange_weak(count, count - 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+    }
+}
+
+fn decrement_polling_suspend_pending_count() {
+    loop {
+        let count = POLLING_SUSPEND_PENDING_COUNT.load(Ordering::Relaxed);
+        if count == 0 {
+            return;
+        }
+
+        if POLLING_SUSPEND_PENDING_COUNT
+            .compare_exchange_weak(count, count - 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
         }
     }
 }

@@ -1,9 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use rp2040_fred_protocol::bridge_proto::{
-    Packet, MIN_PACKET_SIZE, PACKET_SIZE, PROTOCOL_VERSION
-};
+use rp2040_fred_protocol::bridge_proto::{Packet, MIN_PACKET_SIZE, PACKET_SIZE, PROTOCOL_VERSION};
 use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
 
 pub struct UsbTransport {

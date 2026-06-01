@@ -10,6 +10,15 @@ pub const TRACE_PACKED_SAMPLE_SIZE: usize = 3;
 pub const TRACE_SAMPLES_PER_PACKET: usize =
     (PAYLOAD_SIZE - TRACE_METADATA_SIZE) / TRACE_PACKED_SAMPLE_SIZE;
 pub const TRACE_TIMESTAMP_UNKNOWN_US: u64 = u64::MAX;
+pub const COMMAND_BLOCK_PAYLOAD_SIZE: usize = 20;
+pub const COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE: usize = COMMAND_BLOCK_PAYLOAD_SIZE + 1;
+pub const COMMAND_BLOCK_FLAG_SUSPEND_POLLING: u8 = 1 << 0;
+pub const COMMAND_BLOCK_FLAG_ARM_WAIT: u8 = 1 << 1;
+pub const CONTROLLER_ACTION_FLAG_SUSPEND_POLLING: u8 = 1 << 0;
+pub const TELEMETRY_FLAG_ENABLED: u8 = 1 << 0;
+pub const TELEMETRY_FLAG_CONTROLLER_BUSY: u8 = 1 << 1;
+pub const TELEMETRY_FLAG_COMMAND_ACTIVE: u8 = 1 << 2;
+pub const TELEMETRY_FLAG_CONTROLLER_ERROR: u8 = 1 << 3;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +28,9 @@ pub enum MsgType {
     UnitCfg = 0x11,
     SnapshotReq = 0x12,
     CaptureSet = 0x13,
+    CommandBlock = 0x14,
+    ControllerAction = 0x15,
+    ControllerStatusReq = 0x16,
     Ack = 0x80,
     Nack = 0x81,
     Telemetry = 0x90,
@@ -34,11 +46,29 @@ impl MsgType {
             0x11 => Some(Self::UnitCfg),
             0x12 => Some(Self::SnapshotReq),
             0x13 => Some(Self::CaptureSet),
+            0x14 => Some(Self::CommandBlock),
+            0x15 => Some(Self::ControllerAction),
+            0x16 => Some(Self::ControllerStatusReq),
             0x80 => Some(Self::Ack),
             0x81 => Some(Self::Nack),
             0x90 => Some(Self::Telemetry),
             0x91 => Some(Self::Health),
             0x92 => Some(Self::TraceSample),
+            _ => None,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControllerAction {
+    ArmWait = 0x01,
+}
+
+impl ControllerAction {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x01 => Some(Self::ArmWait),
             _ => None,
         }
     }
@@ -62,6 +92,23 @@ pub struct Packet {
     pub payload: [u8; PAYLOAD_SIZE],
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ControllerStatus {
+    pub flags: u8,
+    pub pending_count: u32,
+}
+
+impl ControllerStatus {
+    pub fn is_idle(self) -> bool {
+        self.pending_count == 0
+            && (self.flags & (TELEMETRY_FLAG_CONTROLLER_BUSY | TELEMETRY_FLAG_COMMAND_ACTIVE)) == 0
+    }
+
+    pub fn has_error(self) -> bool {
+        self.flags & TELEMETRY_FLAG_CONTROLLER_ERROR != 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceSamples<'a> {
     pub timestamp_us: Option<u64>,
@@ -83,6 +130,119 @@ impl<'a> TraceSamples<'a> {
 
     pub fn packed_sample_bytes(&self) -> &'a [u8] {
         self.sample_bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandBlock {
+    pub m1: u8,
+    pub m2: u8,
+    pub m3: u16,
+    pub m4: u16,
+    pub m5: u16,
+    pub m6: u16,
+    pub m7: u16,
+    pub m8: u16,
+    pub m9: u16,
+    pub m10: u32,
+}
+
+impl CommandBlock {
+    pub fn to_payload(self) -> [u8; COMMAND_BLOCK_PAYLOAD_SIZE] {
+        let mut payload = [0u8; COMMAND_BLOCK_PAYLOAD_SIZE];
+        payload[0] = self.m1;
+        payload[1] = self.m2;
+        payload[2..4].copy_from_slice(&self.m3.to_le_bytes());
+        payload[4..6].copy_from_slice(&self.m4.to_le_bytes());
+        payload[6..8].copy_from_slice(&self.m5.to_le_bytes());
+        payload[8..10].copy_from_slice(&self.m6.to_le_bytes());
+        payload[10..12].copy_from_slice(&self.m7.to_le_bytes());
+        payload[12..14].copy_from_slice(&self.m8.to_le_bytes());
+        payload[14..16].copy_from_slice(&self.m9.to_le_bytes());
+        payload[16..20].copy_from_slice(&self.m10.to_le_bytes());
+        payload
+    }
+
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        if payload.len() != COMMAND_BLOCK_PAYLOAD_SIZE {
+            return None;
+        }
+
+        Some(Self {
+            m1: payload[0],
+            m2: payload[1],
+            m3: u16::from_le_bytes([payload[2], payload[3]]),
+            m4: u16::from_le_bytes([payload[4], payload[5]]),
+            m5: u16::from_le_bytes([payload[6], payload[7]]),
+            m6: u16::from_le_bytes([payload[8], payload[9]]),
+            m7: u16::from_le_bytes([payload[10], payload[11]]),
+            m8: u16::from_le_bytes([payload[12], payload[13]]),
+            m9: u16::from_le_bytes([payload[14], payload[15]]),
+            m10: u32::from_le_bytes([payload[16], payload[17], payload[18], payload[19]]),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandBlockRequest {
+    pub block: CommandBlock,
+    pub flags: u8,
+}
+
+impl CommandBlockRequest {
+    pub fn to_payload(self) -> [u8; COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE] {
+        let mut payload = [0u8; COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE];
+        payload[..COMMAND_BLOCK_PAYLOAD_SIZE].copy_from_slice(&self.block.to_payload());
+        payload[COMMAND_BLOCK_PAYLOAD_SIZE] = self.flags;
+        payload
+    }
+
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        match payload.len() {
+            COMMAND_BLOCK_PAYLOAD_SIZE => Some(Self {
+                block: CommandBlock::from_payload(payload)?,
+                flags: 0,
+            }),
+            COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE => Some(Self {
+                block: CommandBlock::from_payload(&payload[..COMMAND_BLOCK_PAYLOAD_SIZE])?,
+                flags: payload[COMMAND_BLOCK_PAYLOAD_SIZE],
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn suspend_polling(self) -> bool {
+        self.flags & COMMAND_BLOCK_FLAG_SUSPEND_POLLING != 0
+    }
+
+    pub fn arm_wait(self) -> bool {
+        self.flags & COMMAND_BLOCK_FLAG_ARM_WAIT != 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControllerActionRequest {
+    pub action: ControllerAction,
+    pub flags: u8,
+}
+
+impl ControllerActionRequest {
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        match payload {
+            [action] => Some(Self {
+                action: ControllerAction::from_u8(*action)?,
+                flags: 0,
+            }),
+            [action, flags] => Some(Self {
+                action: ControllerAction::from_u8(*action)?,
+                flags: *flags,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn suspend_polling(self) -> bool {
+        self.flags & CONTROLLER_ACTION_FLAG_SUSPEND_POLLING != 0
     }
 }
 
@@ -183,6 +343,41 @@ impl Packet {
         Self::new(MsgType::CaptureSet, seq, &payload).expect("valid capture_set")
     }
 
+    pub fn command_block(seq: u16, block: CommandBlock) -> Self {
+        Self::new(MsgType::CommandBlock, seq, &block.to_payload()).expect("valid command_block")
+    }
+
+    pub fn command_block_request(seq: u16, request: CommandBlockRequest) -> Self {
+        Self::new(MsgType::CommandBlock, seq, &request.to_payload())
+            .expect("valid command_block request")
+    }
+
+    pub fn command_block_with_flags(seq: u16, block: CommandBlock, flags: u8) -> Self {
+        Self::command_block_request(seq, CommandBlockRequest { block, flags })
+    }
+
+    pub fn controller_action(seq: u16, action: ControllerAction) -> Self {
+        Self::new(MsgType::ControllerAction, seq, &[action as u8]).expect("valid controller_action")
+    }
+
+    pub fn controller_action_with_flags(seq: u16, action: ControllerAction, flags: u8) -> Self {
+        let payload = [action as u8, flags];
+        Self::new(MsgType::ControllerAction, seq, &payload).expect("valid controller_action")
+    }
+
+    pub fn controller_status_req(seq: u16) -> Self {
+        Self::new(MsgType::ControllerStatusReq, seq, &[]).expect("valid controller_status_req")
+    }
+
+    pub fn controller_status_ack(seq: u16, status: ControllerStatus) -> Self {
+        let mut payload = [0u8; 7];
+        payload[0] = MsgType::ControllerStatusReq as u8;
+        payload[1] = 0;
+        payload[2] = status.flags;
+        payload[3..7].copy_from_slice(&status.pending_count.to_le_bytes());
+        Self::new(MsgType::Ack, seq, &payload).expect("valid controller_status_ack")
+    }
+
     pub fn ack(seq: u16, acked_type: MsgType, status: u8) -> Self {
         let payload = [acked_type as u8, status];
         Self::new(MsgType::Ack, seq, &payload).expect("valid ack")
@@ -278,6 +473,52 @@ impl Packet {
             sample_bytes,
         })
     }
+
+    pub fn decode_command_block(&self) -> Option<CommandBlock> {
+        if self.msg_type != MsgType::CommandBlock {
+            return None;
+        }
+        CommandBlock::from_payload(self.payload_used())
+    }
+
+    pub fn decode_command_block_request(&self) -> Option<CommandBlockRequest> {
+        if self.msg_type != MsgType::CommandBlock {
+            return None;
+        }
+        CommandBlockRequest::from_payload(self.payload_used())
+    }
+
+    pub fn decode_controller_action(&self) -> Option<ControllerAction> {
+        self.decode_controller_action_request()
+            .map(|request| request.action)
+    }
+
+    pub fn decode_controller_action_request(&self) -> Option<ControllerActionRequest> {
+        if self.msg_type != MsgType::ControllerAction {
+            return None;
+        }
+        ControllerActionRequest::from_payload(self.payload_used())
+    }
+
+    pub fn decode_controller_status_ack(&self) -> Option<ControllerStatus> {
+        if self.msg_type != MsgType::Ack
+            || self.payload_len < 7
+            || self.payload[0] != MsgType::ControllerStatusReq as u8
+            || self.payload[1] != 0
+        {
+            return None;
+        }
+
+        Some(ControllerStatus {
+            flags: self.payload[2],
+            pending_count: u32::from_le_bytes([
+                self.payload[3],
+                self.payload[4],
+                self.payload[5],
+                self.payload[6],
+            ]),
+        })
+    }
 }
 
 pub fn pack_trace_sample(sample: u32) -> [u8; TRACE_PACKED_SAMPLE_SIZE] {
@@ -310,12 +551,20 @@ pub fn crc32_ieee(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        crc32_ieee, pack_trace_sample, unpack_trace_sample, DecodeError, MsgType, Packet, CRC_SIZE,
-        HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC, PROTOCOL_VERSION,
+        crc32_ieee, pack_trace_sample, unpack_trace_sample, CommandBlock, CommandBlockRequest,
+        ControllerAction, ControllerStatus, DecodeError, MsgType, Packet,
+        COMMAND_BLOCK_FLAG_ARM_WAIT, COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
+        CONTROLLER_ACTION_FLAG_SUSPEND_POLLING, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE,
+        PACKET_MAGIC, PROTOCOL_VERSION, TELEMETRY_FLAG_COMMAND_ACTIVE,
+        TELEMETRY_FLAG_CONTROLLER_BUSY, TELEMETRY_FLAG_CONTROLLER_ERROR,
     };
 
     fn sample(data: u8, addr: u8, read: bool) -> u32 {
         (data as u32) | ((addr as u32) << 8) | ((read as u32) << 16) | (1 << 17)
+    }
+
+    fn raw_word(value: i16) -> u16 {
+        u16::from_le_bytes(value.to_le_bytes())
     }
 
     #[test]
@@ -384,6 +633,114 @@ mod tests {
     }
 
     #[test]
+    fn command_block_roundtrip() {
+        let block = CommandBlock {
+            m1: 1,
+            m2: 0,
+            m3: raw_word(-126),
+            m4: raw_word(1500),
+            m5: raw_word(-832),
+            m6: 0x1234,
+            m7: 0,
+            m8: 400,
+            m9: 61,
+            m10: 0x0001_7FFF,
+        };
+
+        let pkt = Packet::command_block(0x44, block);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode command block");
+
+        assert_eq!(got.msg_type, MsgType::CommandBlock);
+        assert_eq!(got.seq, 0x44);
+        assert_eq!(got.payload_len, 20);
+        assert_eq!(got.decode_command_block(), Some(block));
+        assert_eq!(
+            got.decode_command_block_request(),
+            Some(CommandBlockRequest { block, flags: 0 })
+        );
+    }
+
+    #[test]
+    fn command_block_request_roundtrip() {
+        let request = CommandBlockRequest {
+            block: CommandBlock {
+                m1: 84,
+                m2: 0,
+                m3: raw_word(-126),
+                m4: raw_word(1500),
+                m5: 0,
+                m6: 0,
+                m7: 0,
+                m8: 0,
+                m9: 61,
+                m10: 0x0001_7fff,
+            },
+            flags: COMMAND_BLOCK_FLAG_SUSPEND_POLLING | COMMAND_BLOCK_FLAG_ARM_WAIT,
+        };
+
+        let pkt = Packet::command_block_request(0x46, request);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode command request");
+
+        assert_eq!(got.msg_type, MsgType::CommandBlock);
+        assert_eq!(got.seq, 0x46);
+        assert_eq!(got.payload_len, 21);
+        assert_eq!(got.decode_command_block_request(), Some(request));
+        assert!(request.suspend_polling());
+        assert!(request.arm_wait());
+    }
+
+    #[test]
+    fn short_command_block_payload_is_rejected() {
+        let pkt = Packet::new(MsgType::CommandBlock, 0x45, &[1, 2]).expect("packet");
+        assert_eq!(pkt.decode_command_block(), None);
+        assert_eq!(pkt.decode_command_block_request(), None);
+    }
+
+    #[test]
+    fn controller_action_roundtrip() {
+        let pkt = Packet::controller_action_with_flags(
+            0x47,
+            ControllerAction::ArmWait,
+            CONTROLLER_ACTION_FLAG_SUSPEND_POLLING,
+        );
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode controller action");
+
+        assert_eq!(got.msg_type, MsgType::ControllerAction);
+        assert_eq!(got.seq, 0x47);
+        assert_eq!(
+            got.decode_controller_action(),
+            Some(ControllerAction::ArmWait)
+        );
+        let request = got
+            .decode_controller_action_request()
+            .expect("controller action request");
+        assert_eq!(request.action, ControllerAction::ArmWait);
+        assert!(request.suspend_polling());
+    }
+
+    #[test]
+    fn controller_status_ack_roundtrip() {
+        let status = ControllerStatus {
+            flags: TELEMETRY_FLAG_CONTROLLER_BUSY
+                | TELEMETRY_FLAG_COMMAND_ACTIVE
+                | TELEMETRY_FLAG_CONTROLLER_ERROR,
+            pending_count: 3,
+        };
+        let pkt = Packet::controller_status_ack(0x48, status);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode controller status");
+
+        assert_eq!(got.msg_type, MsgType::Ack);
+        assert_eq!(got.seq, 0x48);
+        assert_eq!(got.decode_controller_status_ack(), Some(status));
+        assert!(!status.is_idle());
+        assert!(status.has_error());
+    }
+
+    #[test]
     fn decode_rejects_bad_crc() {
         let pkt = Packet::ack(7, MsgType::Ping, 0);
         let mut raw = pkt.encode();
@@ -397,7 +754,7 @@ mod tests {
     #[test]
     fn packed_trace_sample_roundtrip() {
         let packed = pack_trace_sample(sample(0x34, 0xF1, true));
-        assert_eq!(packed, [0x34, 0xF1, 0x01]);
+        assert_eq!(packed, [0x34, 0xF1, 0x03]);
         assert_eq!(unpack_trace_sample(packed), sample(0x34, 0xF1, true));
     }
 

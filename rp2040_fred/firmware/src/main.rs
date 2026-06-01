@@ -4,8 +4,8 @@
 #[macro_use]
 mod resources;
 
-mod transport;
 mod decoder;
+mod transport;
 
 use embassy_executor::Spawner;
 use embassy_futures::join::join;

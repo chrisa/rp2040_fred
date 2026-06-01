@@ -72,7 +72,8 @@ impl SpindleState {
             (bcd_pair_value(self.rpm_pairs[0]) * 100 + bcd_pair_value(self.rpm_pairs[1])) as u16;
 
         Some(SpindleSnapshot {
-            rpm_raw, rpm_display: (rpm_raw / 10) * 10,
+            rpm_raw,
+            rpm_display: (rpm_raw / 10) * 10,
         })
     }
 }

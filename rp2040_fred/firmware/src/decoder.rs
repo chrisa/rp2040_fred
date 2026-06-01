@@ -1,4 +1,10 @@
-use crate::{decoder::{axis::{AxisSnapshot, AxisState}, spindle::{SpindleSnapshot, SpindleState}}, resources::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN}};
+use crate::{
+    decoder::{
+        axis::{AxisSnapshot, AxisState},
+        spindle::{SpindleSnapshot, SpindleState},
+    },
+    resources::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN},
+};
 
 mod axis;
 mod spindle;
@@ -55,11 +61,21 @@ pub struct FeedbackCommand {
 
 impl FeedbackCommand {
     pub fn from_master(index: u64, cmd: u8, value: u8, rpm_trigger: bool) -> Self {
-        Self { cmd, value, index, rpm_trigger }
+        Self {
+            cmd,
+            value,
+            index,
+            rpm_trigger,
+        }
     }
 
     pub fn from_cycle(index: u64, cmd: u8, value: u8) -> Self {
-        Self { cmd, value, index, rpm_trigger: false }
+        Self {
+            cmd,
+            value,
+            index,
+            rpm_trigger: false,
+        }
     }
 }
 
@@ -125,21 +141,21 @@ impl FeedbackDecoder {
             0x03 => {
                 self.x.reset();
                 self.x.set_sign(command.value);
-            },
+            }
             0x02 => self.x.set_pair(0, command.value),
             0x01 => self.x.set_pair(1, command.value),
             0x00 => self.x.set_pair(2, command.value),
             0x07 => {
                 self.z.reset();
                 self.z.set_sign(command.value);
-            },
+            }
             0x06 => self.z.set_pair(0, command.value),
             0x05 => self.z.set_pair(1, command.value),
             0x04 => self.z.set_pair(2, command.value),
             0x0D => {
                 self.s.reset();
                 self.s.set_pair(0, command.value);
-            },
+            }
             0x0C => self.s.set_pair(1, command.value),
             _ => {}
         }
@@ -153,9 +169,7 @@ impl FeedbackDecoder {
         }
 
         match self.snapshot(command.index) {
-            Ok(snapshot) => {
-                Ok(snapshot)
-            }
+            Ok(snapshot) => Ok(snapshot),
             Err(error) => Err(error),
         }
     }
