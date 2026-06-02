@@ -24,7 +24,7 @@ use rp2040_fred_protocol::bridge_proto::{
 };
 
 mod bus;
-use bus::Bus;
+use bus::{Bus, CYCLE_START_MASK, PROC_BUSY_MASK};
 
 const TRACE_SAMPLE_RING_LEN: usize = 16_384;
 const COMMAND_RING_LEN: usize = 256;
@@ -67,16 +67,13 @@ pub struct BusMasterTransport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControllerWork {
-    ArmWait { suspend_polling: bool },
+    CycleStartWait,
     CommandBlock(CommandBlockRequest),
 }
 
 impl ControllerWork {
     fn suspends_polling(self) -> bool {
-        match self {
-            Self::ArmWait { suspend_polling } => suspend_polling,
-            Self::CommandBlock(request) => request.suspend_polling() || request.arm_wait(),
-        }
+        true
     }
 }
 
@@ -172,9 +169,7 @@ impl GenericTransport for BusMasterTransport {
                 }
 
                 let work = match action_request.action {
-                    ControllerAction::ArmWait => ControllerWork::ArmWait {
-                        suspend_polling: action_request.suspend_polling(),
-                    },
+                    ControllerAction::CycleStartWait => ControllerWork::CycleStartWait,
                 };
 
                 if self.controller_work.enqueue(work).is_err() {
@@ -484,9 +479,9 @@ async fn capture_core1_loop(
 }
 
 const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
-const COMMAND_BLOCK_EXECUTE_CMD: u8 = 0x00;
 const RPM_TRIGGER_ADDR: u8 = 0x88;
 const RPM_TRIGGER_LOOP_INTERVAL: u8 = 30;
+const FEEDBACK_SERVICE_INTERVAL: Duration = Duration::from_millis(10);
 
 #[embassy_executor::task]
 async fn core1_loop(
@@ -528,33 +523,51 @@ async fn core1_loop(
             CONTROLLER_WORK_ACTIVE.store(true, Ordering::Relaxed);
             CONTROLLER_BUSY.store(true, Ordering::Relaxed);
             match work {
-                ControllerWork::ArmWait { .. } => {
-                    if !bus.wait_proc_cont(PROC_CONT_TIMEOUT).await {
+                ControllerWork::CycleStartWait => {
+                    if !wait_cycle_start(
+                        &mut bus,
+                        &mut commands,
+                        &mut index,
+                        &mut rpm_trigger_countdown,
+                        PROC_CONT_TIMEOUT,
+                    )
+                    .await
+                    {
                         CONTROLLER_ERROR.store(true, Ordering::Relaxed);
-                        log_warn!("PROCcont wait timed out");
+                        log_warn!("cycle-start wait timed out");
                     }
                 }
                 ControllerWork::CommandBlock(request) => {
                     let mut run_block = true;
-                    if request.arm_wait() {
-                        run_block = bus.wait_proc_cont(PROC_CONT_TIMEOUT).await;
+                    if request.cycle_start_wait() {
+                        run_block = wait_cycle_start(
+                            &mut bus,
+                            &mut commands,
+                            &mut index,
+                            &mut rpm_trigger_countdown,
+                            PROC_CONT_TIMEOUT,
+                        )
+                        .await;
                         if !run_block {
                             CONTROLLER_ERROR.store(true, Ordering::Relaxed);
-                            log_warn!("PROCcont wait timed out before CommandBlock");
+                            log_warn!("cycle-start wait timed out before CommandBlock");
                         }
                     }
                     if run_block {
                         bus.write_command_block(request.block).await;
-                        Timer::after(Duration::from_nanos(50)).await;
-                        if bus
-                            .command_cycle_timeout(COMMAND_BLOCK_EXECUTE_CMD, COMMAND_BLOCK_TIMEOUT)
-                            .await
-                            .is_some()
+                        if wait_command_complete(
+                            &mut bus,
+                            &mut commands,
+                            &mut index,
+                            &mut rpm_trigger_countdown,
+                            COMMAND_BLOCK_TIMEOUT,
+                        )
+                        .await
                         {
                             bus.clear_command_block().await;
                         } else {
                             CONTROLLER_ERROR.store(true, Ordering::Relaxed);
-                            log_warn!("CommandBlock execute cycle timed out");
+                            log_warn!("CommandBlock busy wait timed out");
                         }
                     }
                 }
@@ -567,38 +580,132 @@ async fn core1_loop(
             continue;
         }
 
-        Timer::after(Duration::from_millis(10)).await;
-        for cmd in CMD_SEQUENCE {
-            if POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed) {
-                break;
-            }
-            Timer::after(Duration::from_nanos(50)).await;
-            let value = bus.command_cycle(cmd).await;
-            if commands
-                .enqueue(FeedbackCommand::from_master(
-                    index,
-                    cmd,
-                    value,
-                    rpm_trigger_countdown <= 1,
-                ))
-                .is_err()
-            {
-                COMMAND_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
-            index += 1;
+        Timer::after(FEEDBACK_SERVICE_INTERVAL).await;
+        if !POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed) {
+            poll_feedback_once(
+                &mut bus,
+                &mut commands,
+                &mut index,
+                &mut rpm_trigger_countdown,
+            )
+            .await;
+        }
+    }
+}
+
+async fn wait_cycle_start(
+    bus: &mut Bus<'_>,
+    commands: &mut Producer<'static, FeedbackCommand>,
+    index: &mut u64,
+    rpm_trigger_countdown: &mut u8,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if bus.read_status().await & CYCLE_START_MASK == 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
         }
 
-        if POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed) {
-            continue;
+        if !poll_feedback_once_deadline(bus, commands, index, rpm_trigger_countdown, deadline).await
+        {
+            return false;
+        }
+        Timer::after(FEEDBACK_SERVICE_INTERVAL).await;
+    }
+}
+
+async fn wait_command_complete(
+    bus: &mut Bus<'_>,
+    commands: &mut Producer<'static, FeedbackCommand>,
+    index: &mut u64,
+    rpm_trigger_countdown: &mut u8,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if !poll_feedback_once_deadline(bus, commands, index, rpm_trigger_countdown, deadline).await
+        {
+            return false;
         }
 
-        if rpm_trigger_countdown <= 1 {
-            Timer::after(Duration::from_nanos(50)).await;
-            bus.read_write_zero_pair(RPM_TRIGGER_ADDR).await;
-            rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
-        } else {
-            rpm_trigger_countdown -= 1;
+        if bus.read_status().await & PROC_BUSY_MASK == 0 {
+            return true;
         }
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        Timer::after(FEEDBACK_SERVICE_INTERVAL).await;
+    }
+}
+
+async fn poll_feedback_once(
+    bus: &mut Bus<'_>,
+    commands: &mut Producer<'static, FeedbackCommand>,
+    index: &mut u64,
+    rpm_trigger_countdown: &mut u8,
+) {
+    for cmd in CMD_SEQUENCE {
+        Timer::after(Duration::from_nanos(50)).await;
+        let value = bus.command_cycle(cmd).await;
+        enqueue_feedback_command(commands, index, cmd, value, *rpm_trigger_countdown <= 1);
+    }
+
+    poll_rpm_trigger(bus, rpm_trigger_countdown).await;
+}
+
+async fn poll_feedback_once_deadline(
+    bus: &mut Bus<'_>,
+    commands: &mut Producer<'static, FeedbackCommand>,
+    index: &mut u64,
+    rpm_trigger_countdown: &mut u8,
+    deadline: Instant,
+) -> bool {
+    for cmd in CMD_SEQUENCE {
+        Timer::after(Duration::from_nanos(50)).await;
+        let Some(value) = bus.command_cycle_deadline(cmd, deadline).await else {
+            return false;
+        };
+        enqueue_feedback_command(commands, index, cmd, value, *rpm_trigger_countdown <= 1);
+    }
+
+    poll_rpm_trigger(bus, rpm_trigger_countdown).await;
+    true
+}
+
+fn enqueue_feedback_command(
+    commands: &mut Producer<'static, FeedbackCommand>,
+    index: &mut u64,
+    cmd: u8,
+    value: u8,
+    rpm_trigger: bool,
+) {
+    if commands
+        .enqueue(FeedbackCommand::from_master(
+            *index,
+            cmd,
+            value,
+            rpm_trigger,
+        ))
+        .is_err()
+    {
+        COMMAND_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+    *index = (*index).wrapping_add(1);
+}
+
+async fn poll_rpm_trigger(bus: &mut Bus<'_>, rpm_trigger_countdown: &mut u8) {
+    if *rpm_trigger_countdown <= 1 {
+        Timer::after(Duration::from_nanos(50)).await;
+        bus.read_write_zero_pair(RPM_TRIGGER_ADDR).await;
+        *rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+    } else {
+        *rpm_trigger_countdown -= 1;
     }
 }
 

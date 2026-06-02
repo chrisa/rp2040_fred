@@ -1,9 +1,10 @@
 use crate::transport::pio::master::ThisMasterPio;
-use embassy_time::{Duration, Instant};
+use embassy_time::Instant;
 use rp2040_fred_protocol::bridge_proto::CommandBlock;
 
-const PROC_CONT_ARMED_MASK: u8 = 0x04;
-const PROC_CONT_STARTED_MASK: u8 = 0x08;
+const WRITE_READY_MASK: u8 = 0x01;
+pub const CYCLE_START_MASK: u8 = 0x10;
+pub const PROC_BUSY_MASK: u8 = 0x80;
 
 pub struct Bus<'a> {
     pub pio: ThisMasterPio<'a>,
@@ -15,19 +16,24 @@ impl<'a> Bus<'a> {
         // 2. Write one command byte to `80`.
         // 3. Poll `F0` again until bit 0 clears.
         // 4. Read one response byte from `F1`.
-        self.poll_until(0xF0, 0x01).await;
+        self.poll_until(0xF0, WRITE_READY_MASK).await;
         self.write_cycle(0x80, cmd).await;
-        self.poll_until(0xF0, 0x01).await;
+        self.poll_until(0xF0, WRITE_READY_MASK).await;
         return self.read_cycle(0xF1).await;
     }
 
-    pub async fn command_cycle_timeout(&mut self, cmd: u8, timeout: Duration) -> Option<u8> {
-        let deadline = Instant::now() + timeout;
-        if !self.poll_until_deadline(0xF0, 0x01, deadline).await {
+    pub async fn command_cycle_deadline(&mut self, cmd: u8, deadline: Instant) -> Option<u8> {
+        if !self
+            .poll_until_deadline(0xF0, WRITE_READY_MASK, deadline)
+            .await
+        {
             return None;
         }
         self.write_cycle(0x80, cmd).await;
-        if !self.poll_until_deadline(0xF0, 0x01, deadline).await {
+        if !self
+            .poll_until_deadline(0xF0, WRITE_READY_MASK, deadline)
+            .await
+        {
             return None;
         }
         Some(self.read_cycle(0xF1).await)
@@ -39,27 +45,24 @@ impl<'a> Bus<'a> {
     }
 
     pub async fn write_command_block(&mut self, block: CommandBlock) {
-        self.poll_until(0xF0, 0x01).await;
-
         let payload = block.to_payload();
         for (offset, data) in payload.iter().enumerate() {
-            self.write_cycle(0x92 + offset as u8, *data).await;
+            self.write_register_gated(0x92 + offset as u8, *data).await;
         }
     }
 
     pub async fn clear_command_block(&mut self) {
-        self.write_cycle(0xAF, 0x00).await;
+        self.write_register_gated(0xAF, 0x00).await;
     }
 
-    pub async fn wait_proc_cont(&mut self, timeout: Duration) -> bool {
-        // BBC BASIC R(&F0) masks &200000 and &100000 map to data bits 2 and 3
-        // in the direct byte stream. PROCcont waits for those bits to clear.
-        let deadline = Instant::now() + timeout;
-        self.poll_until_deadline(0xF0, PROC_CONT_ARMED_MASK, deadline)
-            .await
-            && self
-                .poll_until_deadline(0xF0, PROC_CONT_STARTED_MASK, deadline)
-                .await
+    async fn write_register_gated(&mut self, addr: u8, data: u8) {
+        self.poll_until(0xF0, WRITE_READY_MASK).await;
+        self.read_cycle(addr).await;
+        self.write_cycle(addr, data).await;
+    }
+
+    pub async fn read_status(&mut self) -> u8 {
+        self.read_cycle(0xF0).await
     }
 
     pub async fn poll_until(&mut self, addr: u8, mask: u8) {

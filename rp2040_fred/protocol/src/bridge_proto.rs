@@ -1,5 +1,5 @@
 pub const PACKET_MAGIC: u8 = 0xA5;
-pub const PROTOCOL_VERSION: u8 = 4;
+pub const PROTOCOL_VERSION: u8 = 5;
 pub const HEADER_SIZE: usize = 8;
 pub const CRC_SIZE: usize = 4;
 pub const PAYLOAD_SIZE: usize = 305;
@@ -12,9 +12,7 @@ pub const TRACE_SAMPLES_PER_PACKET: usize =
 pub const TRACE_TIMESTAMP_UNKNOWN_US: u64 = u64::MAX;
 pub const COMMAND_BLOCK_PAYLOAD_SIZE: usize = 20;
 pub const COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE: usize = COMMAND_BLOCK_PAYLOAD_SIZE + 1;
-pub const COMMAND_BLOCK_FLAG_SUSPEND_POLLING: u8 = 1 << 0;
-pub const COMMAND_BLOCK_FLAG_ARM_WAIT: u8 = 1 << 1;
-pub const CONTROLLER_ACTION_FLAG_SUSPEND_POLLING: u8 = 1 << 0;
+pub const COMMAND_BLOCK_FLAG_CYCLE_START_WAIT: u8 = 1 << 0;
 pub const TELEMETRY_FLAG_ENABLED: u8 = 1 << 0;
 pub const TELEMETRY_FLAG_CONTROLLER_BUSY: u8 = 1 << 1;
 pub const TELEMETRY_FLAG_COMMAND_ACTIVE: u8 = 1 << 2;
@@ -62,13 +60,13 @@ impl MsgType {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControllerAction {
-    ArmWait = 0x01,
+    CycleStartWait = 0x01,
 }
 
 impl ControllerAction {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
-            0x01 => Some(Self::ArmWait),
+            0x01 => Some(Self::CycleStartWait),
             _ => None,
         }
     }
@@ -211,19 +209,14 @@ impl CommandBlockRequest {
         }
     }
 
-    pub fn suspend_polling(self) -> bool {
-        self.flags & COMMAND_BLOCK_FLAG_SUSPEND_POLLING != 0
-    }
-
-    pub fn arm_wait(self) -> bool {
-        self.flags & COMMAND_BLOCK_FLAG_ARM_WAIT != 0
+    pub fn cycle_start_wait(self) -> bool {
+        self.flags & COMMAND_BLOCK_FLAG_CYCLE_START_WAIT != 0
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControllerActionRequest {
     pub action: ControllerAction,
-    pub flags: u8,
 }
 
 impl ControllerActionRequest {
@@ -231,18 +224,9 @@ impl ControllerActionRequest {
         match payload {
             [action] => Some(Self {
                 action: ControllerAction::from_u8(*action)?,
-                flags: 0,
-            }),
-            [action, flags] => Some(Self {
-                action: ControllerAction::from_u8(*action)?,
-                flags: *flags,
             }),
             _ => None,
         }
-    }
-
-    pub fn suspend_polling(self) -> bool {
-        self.flags & CONTROLLER_ACTION_FLAG_SUSPEND_POLLING != 0
     }
 }
 
@@ -358,11 +342,6 @@ impl Packet {
 
     pub fn controller_action(seq: u16, action: ControllerAction) -> Self {
         Self::new(MsgType::ControllerAction, seq, &[action as u8]).expect("valid controller_action")
-    }
-
-    pub fn controller_action_with_flags(seq: u16, action: ControllerAction, flags: u8) -> Self {
-        let payload = [action as u8, flags];
-        Self::new(MsgType::ControllerAction, seq, &payload).expect("valid controller_action")
     }
 
     pub fn controller_status_req(seq: u16) -> Self {
@@ -553,10 +532,9 @@ mod tests {
     use super::{
         crc32_ieee, pack_trace_sample, unpack_trace_sample, CommandBlock, CommandBlockRequest,
         ControllerAction, ControllerStatus, DecodeError, MsgType, Packet,
-        COMMAND_BLOCK_FLAG_ARM_WAIT, COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
-        CONTROLLER_ACTION_FLAG_SUSPEND_POLLING, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE,
-        PACKET_MAGIC, PROTOCOL_VERSION, TELEMETRY_FLAG_COMMAND_ACTIVE,
-        TELEMETRY_FLAG_CONTROLLER_BUSY, TELEMETRY_FLAG_CONTROLLER_ERROR,
+        COMMAND_BLOCK_FLAG_CYCLE_START_WAIT, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC,
+        PROTOCOL_VERSION, TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY,
+        TELEMETRY_FLAG_CONTROLLER_ERROR,
     };
 
     fn sample(data: u8, addr: u8, read: bool) -> u32 {
@@ -676,7 +654,7 @@ mod tests {
                 m9: 61,
                 m10: 0x0001_7fff,
             },
-            flags: COMMAND_BLOCK_FLAG_SUSPEND_POLLING | COMMAND_BLOCK_FLAG_ARM_WAIT,
+            flags: COMMAND_BLOCK_FLAG_CYCLE_START_WAIT,
         };
 
         let pkt = Packet::command_block_request(0x46, request);
@@ -687,8 +665,7 @@ mod tests {
         assert_eq!(got.seq, 0x46);
         assert_eq!(got.payload_len, 21);
         assert_eq!(got.decode_command_block_request(), Some(request));
-        assert!(request.suspend_polling());
-        assert!(request.arm_wait());
+        assert!(request.cycle_start_wait());
     }
 
     #[test]
@@ -700,11 +677,7 @@ mod tests {
 
     #[test]
     fn controller_action_roundtrip() {
-        let pkt = Packet::controller_action_with_flags(
-            0x47,
-            ControllerAction::ArmWait,
-            CONTROLLER_ACTION_FLAG_SUSPEND_POLLING,
-        );
+        let pkt = Packet::controller_action(0x47, ControllerAction::CycleStartWait);
         let raw = pkt.encode();
         let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode controller action");
 
@@ -712,13 +685,12 @@ mod tests {
         assert_eq!(got.seq, 0x47);
         assert_eq!(
             got.decode_controller_action(),
-            Some(ControllerAction::ArmWait)
+            Some(ControllerAction::CycleStartWait)
         );
         let request = got
             .decode_controller_action_request()
             .expect("controller action request");
-        assert_eq!(request.action, ControllerAction::ArmWait);
-        assert!(request.suspend_polling());
+        assert_eq!(request.action, ControllerAction::CycleStartWait);
     }
 
     #[test]

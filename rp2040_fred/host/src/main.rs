@@ -8,8 +8,7 @@ use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use fredctl::transport::UsbTransport;
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlock, CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
-    COMMAND_BLOCK_FLAG_ARM_WAIT, COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
-    CONTROLLER_ACTION_FLAG_SUSPEND_POLLING,
+    COMMAND_BLOCK_FLAG_CYCLE_START_WAIT,
 };
 use std::thread;
 use std::time::Duration;
@@ -25,9 +24,10 @@ fn main() -> io::Result<()> {
 
     match (cmd.as_str(), mode.as_str()) {
         ("monitor", "usb") => monitor_usb(),
-        ("move", "usb") => move_usb(MoveOptions::parse(args)?),
+        ("jog", "usb") => motion_usb(MotionStart::Immediate, MotionOptions::parse(args)?),
+        ("cycle-move", "usb") => motion_usb(MotionStart::CycleStart, MotionOptions::parse(args)?),
+        ("cycle-start", "usb") => cycle_start_usb(),
         ("tool", "usb") => tool_usb(ToolOptions::parse(args)?),
-        ("arm-wait", "usb") => arm_wait_usb(ArmOptions::parse(args)?),
         ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
@@ -57,10 +57,12 @@ fn main() -> io::Result<()> {
 fn print_help() {
     eprintln!("usage:");
     eprintln!("  fredctl monitor usb");
-    eprintln!("  fredctl move usb --mode rapid --x-counts <diameter_delta> --z-counts <delta> --slew <value> [--suspend-polling] [--wait-complete] [--arm-wait] [--arm-x-counts <diameter_delta>] [--arm-z-counts <delta>]");
-    eprintln!("  fredctl move usb --mode feed --x-counts <diameter_delta> --z-counts <delta> --feed <value> --slew <value> [--suspend-polling] [--wait-complete] [--arm-wait] [--arm-x-counts <diameter_delta>] [--arm-z-counts <delta>]");
+    eprintln!("  fredctl cycle-move usb --mode rapid --x-counts <diameter_delta> --z-counts <delta> --slew <value>");
+    eprintln!("  fredctl cycle-move usb --mode feed --x-counts <diameter_delta> --z-counts <delta> --feed <value> --slew <value>");
+    eprintln!("  fredctl jog usb --mode rapid --x-counts <diameter_delta> --z-counts <delta> --slew <value>");
+    eprintln!("  fredctl jog usb --mode feed --x-counts <diameter_delta> --z-counts <delta> --feed <value> --slew <value>");
+    eprintln!("  fredctl cycle-start usb");
     eprintln!("  fredctl tool usb --current-station <1-8> --target-station <1-8> --slew <value> [--wait-complete]");
-    eprintln!("  fredctl arm-wait usb [--x-counts <diameter_delta>] [--z-counts <delta>] [--suspend-polling]");
     eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
@@ -79,29 +81,46 @@ fn monitor_usb() -> io::Result<()> {
     }
 }
 
-fn move_usb(options: MoveOptions) -> io::Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MotionStart {
+    Immediate,
+    CycleStart,
+}
+
+impl MotionStart {
+    fn waits_for_cycle_start(self) -> bool {
+        matches!(self, Self::CycleStart)
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Immediate => "jog",
+            Self::CycleStart => "cycle-start motion",
+        }
+    }
+}
+
+fn motion_usb(start: MotionStart, options: MotionOptions) -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     t.set_timeout(Duration::from_millis(1000));
 
-    let mut seq = 1;
-    if options.arm_wait {
-        seq = send_arm_prepare_blocks(&mut t, seq, options.arm_options())?;
-    }
-
-    let request = options.command_request()?;
-    seq = send_command_request(&mut t, seq, request)?;
-    println!("sent CommandBlock: {:?}", request.block);
-    if options.wait_complete {
-        wait_controller_idle(&mut t, seq)?;
-        println!("controller idle");
-    }
+    let request = options.command_request(start.waits_for_cycle_start())?;
+    let seq = send_command_request(&mut t, 1, request)?;
+    println!("sent {} CommandBlock: {:?}", start.label(), request.block);
+    wait_controller_idle(&mut t, seq)?;
+    println!("controller idle");
     Ok(())
 }
 
-fn arm_wait_usb(options: ArmOptions) -> io::Result<()> {
+fn cycle_start_usb() -> io::Result<()> {
     let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
     t.set_timeout(Duration::from_millis(1000));
-    let seq = send_arm_wait(&mut t, 1, options)?;
+    let replies = t.transact(Packet::controller_action(
+        1,
+        ControllerAction::CycleStartWait,
+    ))?;
+    ensure_ack(&replies, 1, MsgType::ControllerAction)?;
+    let seq = 2;
     wait_controller_idle(&mut t, seq)?;
     println!("cycle-start wait complete");
     Ok(())
@@ -129,25 +148,6 @@ fn tool_usb(options: ToolOptions) -> io::Result<()> {
         println!("controller idle");
     }
     Ok(())
-}
-
-fn send_arm_prepare_blocks(t: &mut UsbTransport, seq: u16, options: ArmOptions) -> io::Result<u16> {
-    let mut seq = seq;
-    for request in options.prepare_requests()? {
-        seq = send_command_request(t, seq, request)?;
-    }
-    Ok(seq)
-}
-
-fn send_arm_wait(t: &mut UsbTransport, seq: u16, options: ArmOptions) -> io::Result<u16> {
-    let seq = send_arm_prepare_blocks(t, seq, options)?;
-    let replies = t.transact(Packet::controller_action_with_flags(
-        seq,
-        ControllerAction::ArmWait,
-        options.controller_action_flags(),
-    ))?;
-    ensure_ack(&replies, seq, MsgType::ControllerAction)?;
-    Ok(seq.wrapping_add(1))
 }
 
 fn send_command_request(
@@ -358,20 +358,15 @@ impl MoveMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct MoveOptions {
+struct MotionOptions {
     mode: MoveMode,
     x_counts: i32,
     z_counts: i32,
     feed: Option<u32>,
     slew: u16,
-    suspend_polling: bool,
-    wait_complete: bool,
-    arm_wait: bool,
-    arm_x_counts: i32,
-    arm_z_counts: i32,
 }
 
-impl MoveOptions {
+impl MotionOptions {
     fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
         let mut args = args;
         let mut mode = None;
@@ -379,11 +374,6 @@ impl MoveOptions {
         let mut z_counts = None;
         let mut feed = None;
         let mut slew = None;
-        let mut suspend_polling = false;
-        let mut wait_complete = false;
-        let mut arm_wait = false;
-        let mut arm_x_counts = 0;
-        let mut arm_z_counts = 0;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -402,21 +392,10 @@ impl MoveOptions {
                 }
                 "--feed" => feed = Some(parse_u32("--feed", &next_arg(&mut args, "--feed")?)?),
                 "--slew" => slew = Some(parse_u16("--slew", &next_arg(&mut args, "--slew")?)?),
-                "--suspend-polling" => suspend_polling = true,
-                "--wait-complete" => wait_complete = true,
-                "--arm-wait" => arm_wait = true,
-                "--arm-x-counts" => {
-                    arm_x_counts =
-                        parse_i32("--arm-x-counts", &next_arg(&mut args, "--arm-x-counts")?)?
-                }
-                "--arm-z-counts" => {
-                    arm_z_counts =
-                        parse_i32("--arm-z-counts", &next_arg(&mut args, "--arm-z-counts")?)?
-                }
                 _ => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        format!("unknown move option: {arg}"),
+                        format!("unknown motion option: {arg}"),
                     ));
                 }
             }
@@ -428,29 +407,13 @@ impl MoveOptions {
             z_counts: z_counts.ok_or_else(|| missing_option("--z-counts"))?,
             feed,
             slew: slew.ok_or_else(|| missing_option("--slew"))?,
-            suspend_polling,
-            wait_complete,
-            arm_wait,
-            arm_x_counts,
-            arm_z_counts,
         })
     }
 
-    fn arm_options(self) -> ArmOptions {
-        ArmOptions {
-            x_counts: self.arm_x_counts,
-            z_counts: self.arm_z_counts,
-            suspend_polling: self.suspend_polling,
-        }
-    }
-
-    fn command_request(self) -> io::Result<CommandBlockRequest> {
+    fn command_request(self, cycle_start_wait: bool) -> io::Result<CommandBlockRequest> {
         let mut flags = 0;
-        if self.suspend_polling {
-            flags |= COMMAND_BLOCK_FLAG_SUSPEND_POLLING;
-        }
-        if self.arm_wait {
-            flags |= COMMAND_BLOCK_FLAG_ARM_WAIT;
+        if cycle_start_wait {
+            flags |= COMMAND_BLOCK_FLAG_CYCLE_START_WAIT;
         }
 
         Ok(CommandBlockRequest {
@@ -479,66 +442,6 @@ impl MoveOptions {
         }
 
         Ok(block)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ArmOptions {
-    x_counts: i32,
-    z_counts: i32,
-    suspend_polling: bool,
-}
-
-impl ArmOptions {
-    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
-        let mut options = Self::default();
-        let mut args = args;
-
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--x-counts" => {
-                    options.x_counts = parse_i32("--x-counts", &next_arg(&mut args, "--x-counts")?)?
-                }
-                "--z-counts" => {
-                    options.z_counts = parse_i32("--z-counts", &next_arg(&mut args, "--z-counts")?)?
-                }
-                "--suspend-polling" => options.suspend_polling = true,
-                _ => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("unknown arm-wait option: {arg}"),
-                    ));
-                }
-            }
-        }
-
-        Ok(options)
-    }
-
-    fn prepare_requests(self) -> io::Result<[CommandBlockRequest; 2]> {
-        let flags = if self.suspend_polling {
-            COMMAND_BLOCK_FLAG_SUSPEND_POLLING
-        } else {
-            0
-        };
-        Ok([
-            CommandBlockRequest {
-                block: rapid_command_block(self.x_counts, 0, 0)?,
-                flags,
-            },
-            CommandBlockRequest {
-                block: rapid_command_block(0, self.z_counts, 0)?,
-                flags,
-            },
-        ])
-    }
-
-    fn controller_action_flags(self) -> u8 {
-        if self.suspend_polling {
-            CONTROLLER_ACTION_FLAG_SUSPEND_POLLING
-        } else {
-            0
-        }
     }
 }
 
@@ -601,19 +504,18 @@ impl ToolOptions {
             return Ok(Vec::new());
         }
 
-        let flags = COMMAND_BLOCK_FLAG_SUSPEND_POLLING;
         Ok(vec![
             CommandBlockRequest {
                 block: timed_aux_command_block(-832 * i32::from(steps), 400, self.slew)?,
-                flags,
+                flags: 0,
             },
             CommandBlockRequest {
                 block: timed_aux_command_block(159 + 68 * i32::from(steps), 300, self.slew)?,
-                flags,
+                flags: 0,
             },
             CommandBlockRequest {
                 block: timed_aux_command_block(10, 600, self.slew)?,
-                flags,
+                flags: 0,
             },
         ])
     }
@@ -891,20 +793,15 @@ fn sample_is_fcf0_read(sample: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{raw_word, turret_step_count, MoveMode, MoveOptions, ToolOptions};
+    use super::{raw_word, turret_step_count, MotionOptions, MoveMode, ToolOptions};
 
-    fn rapid_options() -> MoveOptions {
-        MoveOptions {
+    fn rapid_options() -> MotionOptions {
+        MotionOptions {
             mode: MoveMode::Rapid,
             x_counts: -252,
             z_counts: 1500,
             feed: None,
             slew: 61,
-            suspend_polling: false,
-            wait_complete: false,
-            arm_wait: false,
-            arm_x_counts: 0,
-            arm_z_counts: 0,
         }
     }
 
@@ -923,17 +820,12 @@ mod tests {
 
     #[test]
     fn feed_move_options_build_command_block() {
-        let block = MoveOptions {
+        let block = MotionOptions {
             mode: MoveMode::Feed,
             x_counts: 0,
             z_counts: -1500,
             feed: Some(100),
             slew: 61,
-            suspend_polling: false,
-            wait_complete: false,
-            arm_wait: false,
-            arm_x_counts: 0,
-            arm_z_counts: 0,
         }
         .command_block()
         .expect("feed block");
@@ -948,17 +840,12 @@ mod tests {
 
     #[test]
     fn feed_move_rejects_missing_feed() {
-        let err = MoveOptions {
+        let err = MotionOptions {
             mode: MoveMode::Feed,
             x_counts: 0,
             z_counts: 10,
             feed: None,
             slew: 61,
-            suspend_polling: false,
-            wait_complete: false,
-            arm_wait: false,
-            arm_x_counts: 0,
-            arm_z_counts: 0,
         }
         .command_block()
         .expect_err("missing feed");
@@ -968,17 +855,12 @@ mod tests {
 
     #[test]
     fn move_options_reject_odd_x_diameter_counts() {
-        let err = MoveOptions {
+        let err = MotionOptions {
             mode: MoveMode::Rapid,
             x_counts: 1,
             z_counts: 0,
             feed: None,
             slew: 61,
-            suspend_polling: false,
-            wait_complete: false,
-            arm_wait: false,
-            arm_x_counts: 0,
-            arm_z_counts: 0,
         }
         .command_block()
         .expect_err("odd x");
@@ -987,59 +869,20 @@ mod tests {
     }
 
     #[test]
-    fn arm_wait_move_request_sets_arm_flag() {
-        let mut options = rapid_options();
-        options.arm_wait = true;
-
-        let request = options.command_request().expect("request");
+    fn cycle_move_request_sets_cycle_start_flag() {
+        let request = rapid_options().command_request(true).expect("request");
 
         assert_ne!(
-            request.flags & rp2040_fred_protocol::bridge_proto::COMMAND_BLOCK_FLAG_ARM_WAIT,
-            0
-        );
-        assert_eq!(
-            request.flags & rp2040_fred_protocol::bridge_proto::COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
+            request.flags & rp2040_fred_protocol::bridge_proto::COMMAND_BLOCK_FLAG_CYCLE_START_WAIT,
             0
         );
     }
 
     #[test]
-    fn move_suspend_polling_sets_suspend_flag() {
-        let mut options = rapid_options();
-        options.suspend_polling = true;
+    fn jog_request_has_no_flags() {
+        let request = rapid_options().command_request(false).expect("request");
 
-        let request = options.command_request().expect("request");
-
-        assert_ne!(
-            request.flags & rp2040_fred_protocol::bridge_proto::COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
-            0
-        );
-    }
-
-    #[test]
-    fn arm_prepare_builds_two_zero_slew_blocks() {
-        let requests = super::ArmOptions {
-            x_counts: -252,
-            z_counts: 1500,
-            suspend_polling: true,
-        }
-        .prepare_requests()
-        .expect("arm prepare");
-
-        assert_eq!(requests[0].block.m1, 0);
-        assert_eq!(requests[0].block.m2, 0);
-        assert_eq!(requests[0].block.m3, raw_word(-126));
-        assert_eq!(requests[0].block.m4, 0);
-        assert_eq!(requests[0].block.m9, 0);
-        assert_ne!(
-            requests[0].flags
-                & rp2040_fred_protocol::bridge_proto::COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
-            0
-        );
-
-        assert_eq!(requests[1].block.m3, 0);
-        assert_eq!(requests[1].block.m4, raw_word(1500));
-        assert_eq!(requests[1].block.m9, 0);
+        assert_eq!(request.flags, 0);
     }
 
     #[test]
@@ -1067,11 +910,7 @@ mod tests {
         assert_eq!(requests[0].block.m5, raw_word(-832 * 4));
         assert_eq!(requests[0].block.m8, 400);
         assert_eq!(requests[0].block.m9, 61);
-        assert_ne!(
-            requests[0].flags
-                & rp2040_fred_protocol::bridge_proto::COMMAND_BLOCK_FLAG_SUSPEND_POLLING,
-            0
-        );
+        assert_eq!(requests[0].flags, 0);
 
         assert_eq!(requests[1].block.m5, raw_word(159 + 68 * 4));
         assert_eq!(requests[1].block.m8, 300);
