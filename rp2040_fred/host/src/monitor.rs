@@ -2,7 +2,9 @@ use std::io;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rp2040_fred_protocol::bridge_proto::{CommandBlockRequest, ControllerStatus, MsgType, Packet};
+use rp2040_fred_protocol::bridge_proto::{
+    CommandBlockRequest, ControllerStatus, MsgType, Packet, RpmServiceMode,
+};
 
 use crate::motion::{self, AxisCalibration};
 use crate::spindle::{self, SpindleDirection};
@@ -133,10 +135,14 @@ impl FredMonitorClient {
         })
     }
 
-    pub fn enable_polling(&mut self, period_ms: u16) -> io::Result<()> {
+    pub fn enable_polling(
+        &mut self,
+        period_ms: u16,
+        rpm_service_mode: RpmServiceMode,
+    ) -> io::Result<()> {
         let seq = self.next_seq();
         self.transact_expect_ack(
-            Packet::telemetry_set(seq, true, period_ms),
+            Packet::telemetry_set(seq, true, period_ms, rpm_service_mode),
             MsgType::TelemetrySet,
         )?;
         Ok(())
@@ -144,7 +150,10 @@ impl FredMonitorClient {
 
     pub fn disable_polling(&mut self) -> io::Result<()> {
         let seq = self.next_seq();
-        self.transact_expect_ack(Packet::telemetry_set(seq, false, 0), MsgType::TelemetrySet)?;
+        self.transact_expect_ack(
+            Packet::telemetry_set(seq, false, 0, RpmServiceMode::Manual),
+            MsgType::TelemetrySet,
+        )?;
         Ok(())
     }
 

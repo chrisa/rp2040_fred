@@ -35,7 +35,7 @@ maturin develop
 from fred_client import FredUsbClient
 
 client = FredUsbClient(vid=0x2E8A, pid=0x000A)
-client.enable_polling(period_ms=10)
+client.enable_polling(period_ms=10, rpm_service="manual")
 
 snapshot = client.next_snapshot()
 print(snapshot)
@@ -57,6 +57,12 @@ client.close()
 available telemetry and returns the newest snapshot from that drain, or `None`
 if no new telemetry arrived before the timeout.  `latest_snapshot()` returns the
 last decoded telemetry snapshot without blocking.
+
+`enable_polling()` takes `rpm_service="manual"` or `"remote"`.  Use
+`"manual"` for monitor-style scripts while the lathe is in manual mode; it uses
+the `FC88` RPM trigger.  Use `"remote"` when the bridge is controlling motion or
+spindle commands; it uses the old manufacturing host's `FCAD` speed-service
+write.
 
 Jog deltas are exposed in machine units:
 

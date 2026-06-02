@@ -1,0 +1,71 @@
+Spindle Command Blocks
+======================
+
+Evidence
+--------
+
+`host/full_make.txt` is the manufacturing-run bus capture with the FCF0
+busy-wait noise removed.  In that run the spindle was started in reverse and
+stopped repeatedly around tool changes.
+
+Collapsed `FC92..FCA5` command blocks show:
+
+- 16 captured starts:
+  `m=(0,3,0,0,0,0,0,0,125,0)`
+- 12 captured stops:
+  `m=(0,5,0,0,0,0,0,0,0,0)`
+- No captured `m2=4` starts in this run.
+
+Representative raw writes:
+
+- Start: `FC92=00`, `FC93=03`, `FCA0=7D`, all other fields zero.
+- Stop: `FC92=00`, `FC93=05`, all remaining fields zero.
+
+The BASIC source in `disk/CNCMAK1.decoded.txt` confirms the shape:
+
+- `M05` path: `do(0,5,0,0,0,0,0,0,0,0)`
+- `M03` / `M04` path: `do(0,X(2),0,0,0,0,0,0,SSL,0)`
+- Before the start command is emitted, `X(2)` is swapped:
+  `IF X(2)=3 THEN X(2)=4 ELSE X(2)=3`
+
+Direction Mapping
+-----------------
+
+The old user-facing help says:
+
+- `M03` = spindle start forward
+- `M04` = spindle start reverse
+- `M05` = spindle stop
+
+Because the BASIC code swaps `3` and `4` before emitting the command block,
+and this capture's only start command was a reverse start using `m2=3`, the
+on-wire mapping is:
+
+- `m1=0, m2=3` -> spindle start reverse
+- `m1=0, m2=4` -> spindle start forward
+- `m1=0, m2=5` -> spindle stop
+
+Speed Field
+-----------
+
+The start command carries `SSL` in `m9`, encoded as the little-endian word at
+`FCA0/FCA1`.
+
+`SSL` is not raw RPM.  The BASIC code computes it from `S` approximately as:
+
+- if `S > 4`: `SSL = S / 24`
+- cap: `SSL = 127`
+
+The manufacturing capture uses `m9=125`, which matches an `S3000` style
+programmed speed (`3000 / 24 = 125`).
+
+The host implementation therefore accepts either an explicit `ssl` speed code
+or an RPM value that is converted to the same approximate code.  Direct reverse
+start matching the capture is:
+
+`do(0,3,0,0,0,0,0,0,125,0)`
+
+Direct forward start inferred from the BASIC swap is:
+
+`do(0,4,0,0,0,0,0,0,125,0)`
+

@@ -30,6 +30,8 @@ Notes
 - Firmware still has a startup-selected passive transport; in that mode `capture usb` uses the capture interface, while motion/controller commands are not available.
 - Because the host claims the master and capture interfaces separately, `capture usb` can run in one process while `monitor usb`, `cycle-move usb`, `jog usb`, `cycle-start usb`, `tool usb`, or `spindle usb` runs in another.
 - `cycle-move usb` waits for the observed cycle-start/continue condition (`FCF0 & 0x10 == 0`) before sending one low-level `CommandBlock`.
+- `monitor usb` requests manual-mode RPM service (`FC88`) so it can be used to
+  prove the manual feedback path.
 - `jog usb` sends the same low-level `CommandBlock` immediately for remote-jog testing.
 - X deltas are entered as diameter counts and must be even because the controller payload uses radius counts.
 - Controller work always pauses normal position/RPM polling while queued or active so background feedback does not compete with motion-command writes.
@@ -52,3 +54,6 @@ Notes
   The userspace HAL component coalesces changing `motor-pos-cmd` targets and only keeps one controller command active at a time.
 - Spindle command pins are wired through LinuxCNC and send start/stop blocks
   through the same queued controller command path as motion and tool change.
+- Python/LinuxCNC polling requests remote-mode RPM service (`FCAD`) because
+  manual-mode `FC88` RPM triggering returns zeros while the bridge owns the
+  machine.

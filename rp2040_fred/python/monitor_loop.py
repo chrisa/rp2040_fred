@@ -5,7 +5,7 @@ from fred_client import FredUsbClient
 
 def main() -> None:
     client = FredUsbClient(0x2E8A, 0x000A)
-    client.enable_polling(period_ms=10)
+    client.enable_polling(period_ms=10, rpm_service="manual")
 
     try:
         while True:

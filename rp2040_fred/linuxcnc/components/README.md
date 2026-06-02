@@ -12,6 +12,7 @@ switch between them by changing the `loadusr` line in `linuxcnc/tcl125.hal`.
 - Both components wire the same spindle pins. `spindle-fwd` emits the inferred
   forward start block, `spindle-rev` emits the captured reverse start block,
   and `spindle-on` false emits the captured stop block.
+- Both components request remote RPM service (`FCAD`) when enabling telemetry.
 
 Example switch:
 

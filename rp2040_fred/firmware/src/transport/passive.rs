@@ -118,7 +118,7 @@ impl PassiveTransport {
                 1
             }
             MsgType::TelemetrySet => {
-                if req.payload_len < 1 {
+                if req.payload_len < 4 {
                     out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 1);
                 } else {
                     self.telemetry_enabled = req.payload[0] != 0;

@@ -9,7 +9,7 @@ use fredctl::spindle::{self, SpindleDirection};
 use fredctl::transport::{UsbRole, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlock, CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
-    COMMAND_BLOCK_FLAG_CYCLE_START_WAIT,
+    RpmServiceMode, COMMAND_BLOCK_FLAG_CYCLE_START_WAIT,
 };
 use std::thread;
 use std::time::Duration;
@@ -74,7 +74,7 @@ fn print_help() {
 
 fn monitor_usb() -> io::Result<()> {
     let mut client = FredMonitorClient::open(0x2E8A, 0x000A)?;
-    client.enable_polling(10)?;
+    client.enable_polling(10, RpmServiceMode::Manual)?;
     print_monitor_header();
 
     let mut i = 0usize;

@@ -178,7 +178,7 @@ def main() -> int:
         x_counts_per_mm=args.x_counts_per_mm,
         z_counts_per_mm=args.z_counts_per_mm,
     ) as client:
-        client.enable_polling(period_ms=args.poll_ms)
+        client.enable_polling(period_ms=args.poll_ms, rpm_service="remote")
         try:
             before = wait_snapshot(client, args.timeout_s)
             print(snapshot_line("initial", before))

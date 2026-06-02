@@ -6,7 +6,7 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
-use rp2040_fred_protocol::bridge_proto::ControllerStatus;
+use rp2040_fred_protocol::bridge_proto::{ControllerStatus, RpmServiceMode};
 
 create_exception!(_fred_native, FredProtocolError, PyRuntimeError);
 create_exception!(_fred_native, FredUsbError, PyRuntimeError);
@@ -41,9 +41,17 @@ impl FredUsbClient {
         Ok(Self { inner: Some(inner) })
     }
 
-    #[pyo3(signature = (period_ms=25))]
-    fn enable_polling(&mut self, py: Python<'_>, period_ms: u16) -> PyResult<()> {
-        self.with_client(py, |client| client.enable_polling(period_ms))
+    #[pyo3(signature = (period_ms=25, rpm_service="manual"))]
+    fn enable_polling(
+        &mut self,
+        py: Python<'_>,
+        period_ms: u16,
+        rpm_service: &str,
+    ) -> PyResult<()> {
+        let rpm_service_mode = parse_rpm_service_mode(rpm_service)?;
+        self.with_client(py, move |client| {
+            client.enable_polling(period_ms, rpm_service_mode)
+        })
     }
 
     fn disable_polling(&mut self, py: Python<'_>) -> PyResult<()> {
@@ -197,6 +205,16 @@ fn status_to_dict<'py>(py: Python<'py>, status: ControllerStatus) -> PyResult<Bo
     dict.set_item("idle", status.is_idle())?;
     dict.set_item("error", status.has_error())?;
     Ok(dict)
+}
+
+fn parse_rpm_service_mode(value: &str) -> PyResult<RpmServiceMode> {
+    match value {
+        "manual" | "fc88" | "88" => Ok(RpmServiceMode::Manual),
+        "remote" | "fcad" | "ad" => Ok(RpmServiceMode::Remote),
+        _ => Err(FredProtocolError::new_err(format!(
+            "unknown RPM service mode: {value}"
+        ))),
+    }
 }
 
 fn map_io_error(err: io::Error) -> PyErr {

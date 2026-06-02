@@ -6,7 +6,7 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::multicore::Stack;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
-use portable_atomic::{AtomicBool, AtomicU32, Ordering};
+use portable_atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use rp2040_fred_firmware::{log_info, log_warn};
 use static_cell::StaticCell;
 
@@ -18,7 +18,7 @@ use crate::transport::pio::master::ThisMasterPio;
 use crate::transport::pio::passive::PassivePio;
 
 use rp2040_fred_protocol::bridge_proto::{
-    CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
+    CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet, RpmServiceMode,
     TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY, TELEMETRY_FLAG_CONTROLLER_ERROR,
     TELEMETRY_FLAG_ENABLED, TRACE_SAMPLES_PER_PACKET,
 };
@@ -47,6 +47,7 @@ static CONTROLLER_WORK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CONTROLLER_BUSY: AtomicBool = AtomicBool::new(false);
 static CONTROLLER_ERROR: AtomicBool = AtomicBool::new(false);
 static POSITION_POLLING_SUSPENDED: AtomicBool = AtomicBool::new(false);
+static RPM_SERVICE_MODE: AtomicU8 = AtomicU8::new(RpmServiceMode::Manual as u8);
 static CONTROLLER_WORK_RING: StaticCell<Queue<ControllerWork, CONTROLLER_WORK_RING_LEN>> =
     StaticCell::new();
 static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
@@ -169,17 +170,24 @@ impl BusMasterTransport {
                 1
             }
             MsgType::TelemetrySet => {
-                if req.payload_len < 1 {
+                if req.payload_len < 4 {
                     out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 1);
                 } else {
+                    let Some(rpm_service_mode) = RpmServiceMode::from_u8(req.payload[3]) else {
+                        out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 2);
+                        return 1;
+                    };
+
                     self.telemetry_enabled = req.payload[0] != 0;
                     self.reset_master_stream_state();
-                    if req.payload_len >= 3 {
-                        self.telemetry_period_ms =
-                            u16::from_le_bytes([req.payload[1], req.payload[2]]);
-                    }
+                    self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
+                    RPM_SERVICE_MODE.store(rpm_service_mode as u8, Ordering::Relaxed);
                     out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
-                    log_info!("telemetry_enabled: {}", self.telemetry_enabled);
+                    log_info!(
+                        "telemetry_enabled: {} rpm_service_mode: {}",
+                        self.telemetry_enabled,
+                        rpm_service_mode as u8
+                    );
                 }
                 1
             }
@@ -482,7 +490,8 @@ async fn capture_core1_loop(
 }
 
 const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
-const RPM_TRIGGER_ADDR: u8 = 0x88;
+const MANUAL_RPM_TRIGGER_ADDR: u8 = 0x88;
+const REMOTE_SPEED_SERVICE_ADDR: u8 = 0xAD;
 const RPM_TRIGGER_LOOP_INTERVAL: u8 = 30;
 const FEEDBACK_SERVICE_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -560,6 +569,7 @@ async fn core1_loop(
                         .await
                         {
                             bus.clear_command_block().await;
+                            service_rpm_update(&mut bus, &mut rpm_trigger_countdown).await;
                         } else {
                             CONTROLLER_ERROR.store(true, Ordering::Relaxed);
                             log_warn!("CommandBlock busy wait timed out");
@@ -696,12 +706,27 @@ fn enqueue_feedback_command(
 
 async fn poll_rpm_trigger(bus: &mut Bus<'_>, rpm_trigger_countdown: &mut u8) {
     if *rpm_trigger_countdown <= 1 {
-        Timer::after(Duration::from_nanos(50)).await;
-        bus.read_write_zero_pair(RPM_TRIGGER_ADDR).await;
-        *rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+        service_rpm_update(bus, rpm_trigger_countdown).await;
     } else {
         *rpm_trigger_countdown -= 1;
     }
+}
+
+async fn service_rpm_update(bus: &mut Bus<'_>, rpm_trigger_countdown: &mut u8) {
+    Timer::after(Duration::from_nanos(50)).await;
+    match current_rpm_service_mode() {
+        RpmServiceMode::Manual => bus.read_write_zero_pair(MANUAL_RPM_TRIGGER_ADDR).await,
+        RpmServiceMode::Remote => {
+            bus.write_zero_register_gated(REMOTE_SPEED_SERVICE_ADDR)
+                .await
+        }
+    }
+    *rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+}
+
+fn current_rpm_service_mode() -> RpmServiceMode {
+    RpmServiceMode::from_u8(RPM_SERVICE_MODE.load(Ordering::Relaxed))
+        .unwrap_or(RpmServiceMode::Manual)
 }
 
 fn enqueue_controller_work(suspends_polling: bool) {

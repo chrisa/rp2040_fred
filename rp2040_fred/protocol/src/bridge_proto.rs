@@ -1,5 +1,5 @@
 pub const PACKET_MAGIC: u8 = 0xA5;
-pub const PROTOCOL_VERSION: u8 = 5;
+pub const PROTOCOL_VERSION: u8 = 6;
 pub const USB_VENDOR_CLASS: u8 = 0xFF;
 pub const USB_VENDOR_SUBCLASS: u8 = 0x00;
 pub const USB_PROTOCOL_MASTER: u8 = 0x01;
@@ -71,6 +71,23 @@ impl ControllerAction {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x01 => Some(Self::CycleStartWait),
+            _ => None,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RpmServiceMode {
+    Manual = 0x00,
+    Remote = 0x01,
+}
+
+impl RpmServiceMode {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x00 => Some(Self::Manual),
+            0x01 => Some(Self::Remote),
             _ => None,
         }
     }
@@ -321,8 +338,18 @@ impl Packet {
         Self::new(MsgType::Ping, seq, &[]).expect("valid ping")
     }
 
-    pub fn telemetry_set(seq: u16, enable: bool, period_ms: u16) -> Self {
-        let payload = [enable as u8, period_ms as u8, (period_ms >> 8) as u8];
+    pub fn telemetry_set(
+        seq: u16,
+        enable: bool,
+        period_ms: u16,
+        rpm_service_mode: RpmServiceMode,
+    ) -> Self {
+        let payload = [
+            enable as u8,
+            period_ms as u8,
+            (period_ms >> 8) as u8,
+            rpm_service_mode as u8,
+        ];
         Self::new(MsgType::TelemetrySet, seq, &payload).expect("valid telemetry_set")
     }
 
@@ -535,7 +562,7 @@ pub fn crc32_ieee(data: &[u8]) -> u32 {
 mod tests {
     use super::{
         crc32_ieee, pack_trace_sample, unpack_trace_sample, CommandBlock, CommandBlockRequest,
-        ControllerAction, ControllerStatus, DecodeError, MsgType, Packet,
+        ControllerAction, ControllerStatus, DecodeError, MsgType, Packet, RpmServiceMode,
         COMMAND_BLOCK_FLAG_CYCLE_START_WAIT, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC,
         PROTOCOL_VERSION, TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY,
         TELEMETRY_FLAG_CONTROLLER_ERROR,
@@ -579,6 +606,20 @@ mod tests {
         assert_eq!(i32::from_le_bytes([p[8], p[9], p[10], p[11]]), 54321);
         assert_eq!(u16::from_le_bytes([p[12], p[13]]), 1800);
         assert_eq!(p[14], 0x03);
+    }
+
+    #[test]
+    fn telemetry_set_carries_rpm_service_mode() {
+        let pkt = Packet::telemetry_set(9, true, 25, RpmServiceMode::Remote);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode");
+
+        assert_eq!(got.msg_type, MsgType::TelemetrySet);
+        assert_eq!(got.payload_len, 4);
+        assert_eq!(
+            got.payload_used(),
+            &[1, 25, 0, RpmServiceMode::Remote as u8]
+        );
     }
 
     #[test]

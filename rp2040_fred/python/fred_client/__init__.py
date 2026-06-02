@@ -53,8 +53,8 @@ class FredUsbClient:
         self.close()
         return False
 
-    def enable_polling(self, period_ms: int = 25) -> None:
-        self._inner.enable_polling(period_ms=period_ms)
+    def enable_polling(self, period_ms: int = 25, rpm_service: str = "manual") -> None:
+        self._inner.enable_polling(period_ms=period_ms, rpm_service=rpm_service)
 
     def disable_polling(self) -> None:
         self._inner.disable_polling()

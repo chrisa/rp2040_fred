@@ -75,8 +75,36 @@ Working hypothesis
 
 - Manufacturing mode likely configures the controller through `FCA0..FCAF` so that RPM updates continue automatically, without needing the `FC88`/`FC89` one-shot action.
 
+Remote-mode refinement
+----------------------
+
+After remote spindle control was implemented, manual-mode RPM feedback still
+worked through the `FC88` trigger path, but remote operation returned zeros
+from `fredctl monitor`.
+
+Re-checking `host/full_make.txt` against `disk/CNCMAK1.decoded.txt` shows:
+
+- `FC88`/`FC89` are feedback/manual-mode sideband actions and do not appear in
+  the manufacturing run.
+- The old manufacturing host calls `PROCSPEED`, which is:
+  `addr%=&AD: PROCb(0)`.
+- `PROCb` uses the same gated write helper as command-block register writes,
+  so the remote-mode speed service write should be a gated `FCAD=00`, not an
+  ungated `FC88=00`.
+- `FCAD=00` appears repeatedly around spindle starts, stops, and motion blocks
+  in `host/full_make.txt`.
+
+Firmware master mode now lets the client choose the RPM service path:
+
+- `manual`: use the feedback/manual `FC88=00` read/write trigger.
+- `remote`: use the manufacturing/remote gated `FCAD=00` speed-service write.
+
+Both modes continue to read RPM through the normal `FC80=0D/0C` feedback
+commands.
+
 What is not yet proven
 ----------------------
 
 - Whether the `FC88`/`FC89` action latches one sample, starts a timed acquisition window, clears stale data, or acknowledges an existing measurement-ready flag.
-- Which exact manufacturing-mode register write causes continuous RPM updates.
+- Whether periodic `FCAD=00`, command-completion `FCAD=00`, or both are needed
+  for the most stable live RPM feedback while LinuxCNC owns the machine.

@@ -248,7 +248,7 @@ def connect_if_due(now: float) -> Optional[FredUsbClient]:
             x_counts_per_mm=X_COUNTS_PER_MM,
             z_counts_per_mm=Z_COUNTS_PER_MM,
         )
-        new_client.enable_polling(period_ms=POLL_PERIOD_MS)
+        new_client.enable_polling(period_ms=POLL_PERIOD_MS, rpm_service="remote")
         h["usb-connected"] = True
         h["controller-error"] = False
         print("tcl125-delta: connected to RP2040 FRED bridge")

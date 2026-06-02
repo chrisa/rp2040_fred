@@ -44,6 +44,10 @@ impl<'a> Bus<'a> {
         self.write_cycle(addr, 0x00).await;
     }
 
+    pub async fn write_zero_register_gated(&mut self, addr: u8) {
+        self.write_register_gated(addr, 0x00).await;
+    }
+
     pub async fn write_command_block(&mut self, block: CommandBlock) {
         let payload = block.to_payload();
         for (offset, data) in payload.iter().enumerate() {
