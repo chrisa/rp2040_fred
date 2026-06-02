@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 from ._fred_native import FredProtocolError, FredUsbError
 from ._fred_native import FredUsbClient as _NativeFredUsbClient
@@ -65,11 +65,74 @@ class FredUsbClient:
     def disable_capture(self) -> None:
         raise NotImplementedError("Passive capture is not exposed in the Rust-backed Python client")
 
-    def refresh(self) -> Dict[str, object]:
-        return dict(self._inner.refresh())
+    def refresh(self, timeout_ms: int = 0) -> Optional[Dict[str, object]]:
+        snapshot = self._inner.refresh_timeout(timeout_ms=timeout_ms)
+        if snapshot is None:
+            return None
+        return dict(snapshot)
 
     def next_snapshot(self) -> Dict[str, object]:
         return dict(self._inner.next_snapshot())
+
+    def latest_snapshot(self) -> Optional[Dict[str, object]]:
+        snapshot = self._inner.latest_snapshot()
+        if snapshot is None:
+            return None
+        return dict(snapshot)
+
+    def rapid_move_delta(
+        self,
+        *,
+        x_mm: float = 0.0,
+        z_mm: float = 0.0,
+        slew: int = 61,
+        wait: bool = False,
+    ) -> bool:
+        return bool(self._inner.rapid_move_delta(x_mm=x_mm, z_mm=z_mm, slew=slew, wait=wait))
+
+    def feed_move_delta(
+        self,
+        *,
+        x_mm: float = 0.0,
+        z_mm: float = 0.0,
+        feed: int = 100,
+        slew: int = 61,
+        wait: bool = False,
+    ) -> bool:
+        return bool(
+            self._inner.feed_move_delta(
+                x_mm=x_mm,
+                z_mm=z_mm,
+                feed=feed,
+                slew=slew,
+                wait=wait,
+            )
+        )
+
+    def controller_status(self) -> Dict[str, object]:
+        return dict(self._inner.controller_status())
+
+    def wait_idle(self, timeout_ms: Optional[int] = None) -> None:
+        self._inner.wait_idle(timeout_ms=timeout_ms)
+
+    def set_spindle(
+        self,
+        *,
+        on: bool,
+        rpm: float = 0.0,
+        forward: bool = True,
+        ssl: Optional[int] = None,
+        wait: bool = False,
+    ) -> bool:
+        return bool(
+            self._inner.set_spindle(
+                on=on,
+                rpm=rpm,
+                forward=forward,
+                ssl=ssl,
+                wait=wait,
+            )
+        )
 
     def read_capture_samples(self, timeout_ms: int = 1) -> list[int]:
         raise NotImplementedError(

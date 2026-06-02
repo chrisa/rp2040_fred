@@ -1,0 +1,45 @@
+loadrt [KINS]KINEMATICS
+loadrt [EMCMOT]EMCMOT servo_period_nsec=[EMCMOT]SERVO_PERIOD num_joints=[KINS]JOINTS num_spindles=1
+loadrt comp names=comp_x,comp_z
+
+addf motion-command-handler servo-thread
+addf motion-controller servo-thread
+addf comp_x servo-thread
+addf comp_z servo-thread
+
+loadusr -W -n tcl125 ./components/tcl125_hal.py
+
+# x-axis joint 0
+net x-pos-cmd joint.0.motor-pos-cmd => tcl125.x-pos-cmd
+net x-pos-fb  tcl125.x-pos-fb       => joint.0.motor-pos-fb
+
+# z-axis joint 1
+net z-pos-cmd joint.1.motor-pos-cmd => tcl125.z-pos-cmd
+net z-pos-fb  tcl125.z-pos-fb       => joint.1.motor-pos-fb
+
+# spindle
+net spindle-rpm-fb    tcl125.spindle-rpm      => spindle.0.speed-in
+net spindle-at-speed  tcl125.spindle-at-speed => spindle.0.at-speed
+net spindle-speed-cmd spindle.0.speed-out     => tcl125.spindle-speed-cmd
+net spindle-on        spindle.0.on            => tcl125.spindle-on
+net spindle-fwd       spindle.0.forward       => tcl125.spindle-fwd
+net spindle-rev       spindle.0.reverse       => tcl125.spindle-rev
+
+# minimal estop
+net estop-loop iocontrol.0.user-enable-out => iocontrol.0.emc-enable-in
+
+# homing
+net Xhomeswpos => comp_x.in0
+net Zhomeswpos => comp_z.in0
+
+sets Xhomeswpos 1
+sets Zhomeswpos 2
+
+net x-pos-fb => comp_x.in1
+net z-pos-fb => comp_z.in1
+
+setp comp_x.hyst .02
+setp comp_z.hyst .02
+
+net Xhomesw <= comp_x.out => joint.0.home-sw-in
+net Zhomesw <= comp_z.out => joint.1.home-sw-in

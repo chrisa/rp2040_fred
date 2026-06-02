@@ -2,3 +2,6 @@
 (cd host && rsync -vr src pi@192.168.3.87:rp2040_fred/rp2040_fred/host/)
 (cd protocol && rsync -vr src pi@192.168.3.87:rp2040_fred/rp2040_fred/protocol/)
 (cd python && rsync -vr rust_ext/src pi@192.168.3.87:rp2040_fred/rp2040_fred/python/rust_ext/)
+(cd python && rsync -vr *.py pi@192.168.3.87:rp2040_fred/rp2040_fred/python/)
+(cd python && rsync --exclude __pycache__ -vr fred_client pi@192.168.3.87:rp2040_fred/rp2040_fred/python/)
+(cd linuxcnc && rsync --exclude __pycache__ -vr * pi@192.168.3.87:linuxcnc/)

@@ -1,0 +1,110 @@
+Planned moves:
+  x+: x_mm=+1.000000 z_mm=+0.000000
+  x-: x_mm=-1.000000 z_mm=+0.000000
+  z+: x_mm=+0.000000 z_mm=+1.000000
+  z-: x_mm=+0.000000 z_mm=-1.000000
+initial: gen=3 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ before: gen=8 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ commanded: mode=feed sent=True x_mm=+1.000000 z_mm=+0.000000
+x+ after: gen=22 tick=0 x_mm=+0.380000 z_mm=+0.000000 x_counts=+19 z_counts=+0 rpm=0
+x+ observed: dx_mm=+0.380000 dz_mm=+0.000000 dx_counts=+19 dz_counts=+0
+x- before: gen=27 tick=0 x_mm=+0.680000 z_mm=+0.000000 x_counts=+34 z_counts=+0 rpm=0
+x- commanded: mode=feed sent=True x_mm=-1.000000 z_mm=+0.000000
+x- after: gen=41 tick=0 x_mm=+0.620000 z_mm=+0.000000 x_counts=+31 z_counts=+0 rpm=0
+x- observed: dx_mm=-0.060000 dz_mm=+0.000000 dx_counts=-3 dz_counts=+0
+z+ before: gen=46 tick=0 x_mm=+0.320000 z_mm=+0.000000 x_counts=+16 z_counts=+0 rpm=0
+z+ commanded: mode=feed sent=True x_mm=+0.000000 z_mm=+1.000000
+z+ after: gen=60 tick=0 x_mm=+0.000000 z_mm=+0.240000 x_counts=+0 z_counts=+24 rpm=0
+z+ observed: dx_mm=-0.320000 dz_mm=+0.240000 dx_counts=-16 dz_counts=+24
+z- before: gen=65 tick=0 x_mm=+0.000000 z_mm=+0.240000 x_counts=+0 z_counts=+24 rpm=0
+z- commanded: mode=feed sent=True x_mm=+0.000000 z_mm=-1.000000
+z- after: gen=88 tick=0 x_mm=+0.000000 z_mm=+0.760000 x_counts=+0 z_counts=+76 rpm=0
+z- observed: dx_mm=+0.000000 dz_mm=+0.520000 dx_counts=+0 dz_counts=+52
+Planned moves:
+  x+: x_mm=+1.000000 z_mm=+0.000000
+  x-: x_mm=-1.000000 z_mm=+0.000000
+  z+: x_mm=+0.000000 z_mm=+1.000000
+  z-: x_mm=+0.000000 z_mm=-1.000000
+initial: gen=1 tick=0 x_mm=+0.000000 z_mm=+0.300000 x_counts=+0 z_counts=+30 rpm=0
+x+ before: gen=6 tick=0 x_mm=+0.000000 z_mm=+0.300000 x_counts=+0 z_counts=+30 rpm=0
+x+ commanded: mode=feed sent=True x_mm=+1.000000 z_mm=+0.000000
+x+ after: gen=19 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x+ observed: dx_mm=+1.000000 dz_mm=-0.300000 dx_counts=+50 dz_counts=-30
+x- before: gen=24 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x- commanded: mode=feed sent=True x_mm=-1.000000 z_mm=+0.000000
+x- after: gen=52 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x- observed: dx_mm=-1.000000 dz_mm=+0.000000 dx_counts=-50 dz_counts=+0
+z+ before: gen=57 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z+ commanded: mode=feed sent=True x_mm=+0.000000 z_mm=+1.000000
+z+ after: gen=71 tick=0 x_mm=+0.000000 z_mm=+0.840000 x_counts=+0 z_counts=+84 rpm=0
+z+ observed: dx_mm=+0.000000 dz_mm=+0.840000 dx_counts=+0 dz_counts=+84
+z- before: gen=76 tick=0 x_mm=+0.000000 z_mm=+0.990000 x_counts=+0 z_counts=+99 rpm=0
+z- commanded: mode=feed sent=True x_mm=+0.000000 z_mm=-1.000000
+z- after: gen=90 tick=0 x_mm=+0.000000 z_mm=+0.160000 x_counts=+0 z_counts=+16 rpm=0
+z- observed: dx_mm=+0.000000 dz_mm=-0.830000 dx_counts=+0 dz_counts=-83
+Planned moves:
+  x+: x_mm=+1.000000 z_mm=+0.000000
+  x-: x_mm=-1.000000 z_mm=+0.000000
+  z+: x_mm=+0.000000 z_mm=+1.000000
+  z-: x_mm=+0.000000 z_mm=-1.000000
+initial: gen=1 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ before: gen=6 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ commanded: mode=feed sent=True x_mm=+1.000000 z_mm=+0.000000
+x+ after: gen=20 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x+ observed: dx_mm=+1.000000 dz_mm=+0.000000 dx_counts=+50 dz_counts=+0
+x- before: gen=25 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x- commanded: mode=feed sent=True x_mm=-1.000000 z_mm=+0.000000
+x- after: gen=39 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x- observed: dx_mm=-1.000000 dz_mm=+0.000000 dx_counts=-50 dz_counts=+0
+z+ before: gen=44 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z+ commanded: mode=feed sent=True x_mm=+0.000000 z_mm=+1.000000
+z+ after: gen=71 tick=0 x_mm=+0.000000 z_mm=+1.000000 x_counts=+0 z_counts=+100 rpm=0
+z+ observed: dx_mm=+0.000000 dz_mm=+1.000000 dx_counts=+0 dz_counts=+100
+z- before: gen=76 tick=0 x_mm=+0.000000 z_mm=+1.000000 x_counts=+0 z_counts=+100 rpm=0
+z- commanded: mode=feed sent=True x_mm=+0.000000 z_mm=-1.000000
+z- after: gen=90 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z- observed: dx_mm=+0.000000 dz_mm=-1.000000 dx_counts=+0 dz_counts=-100
+Planned moves:
+  x+: x_mm=+1.000000 z_mm=+0.000000
+  x-: x_mm=-1.000000 z_mm=+0.000000
+  z+: x_mm=+0.000000 z_mm=+1.000000
+  z-: x_mm=+0.000000 z_mm=-1.000000
+initial: gen=1 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ before: gen=6 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ commanded: mode=feed sent=True x_mm=+1.000000 z_mm=+0.000000
+x+ after: gen=19 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x+ observed: dx_mm=+1.000000 dz_mm=+0.000000 dx_counts=+50 dz_counts=+0
+x- before: gen=24 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x- commanded: mode=feed sent=True x_mm=-1.000000 z_mm=+0.000000
+x- after: gen=36 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x- observed: dx_mm=-1.000000 dz_mm=+0.000000 dx_counts=-50 dz_counts=+0
+z+ before: gen=41 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z+ commanded: mode=feed sent=True x_mm=+0.000000 z_mm=+1.000000
+z+ after: gen=55 tick=0 x_mm=+0.000000 z_mm=+1.000000 x_counts=+0 z_counts=+100 rpm=0
+z+ observed: dx_mm=+0.000000 dz_mm=+1.000000 dx_counts=+0 dz_counts=+100
+z- before: gen=60 tick=0 x_mm=+0.000000 z_mm=+1.000000 x_counts=+0 z_counts=+100 rpm=0
+z- commanded: mode=feed sent=True x_mm=+0.000000 z_mm=-1.000000
+z- after: gen=74 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z- observed: dx_mm=+0.000000 dz_mm=-1.000000 dx_counts=+0 dz_counts=-100
+Planned moves:
+  x+: x_mm=+1.000000 z_mm=+0.000000
+  x-: x_mm=-1.000000 z_mm=+0.000000
+  z+: x_mm=+0.000000 z_mm=+1.000000
+  z-: x_mm=+0.000000 z_mm=-1.000000
+initial: gen=2 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ before: gen=7 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x+ commanded: mode=feed sent=True x_mm=+1.000000 z_mm=+0.000000
+x+ after: gen=21 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x+ observed: dx_mm=+1.000000 dz_mm=+0.000000 dx_counts=+50 dz_counts=+0
+x- before: gen=26 tick=0 x_mm=+1.000000 z_mm=+0.000000 x_counts=+50 z_counts=+0 rpm=0
+x- commanded: mode=feed sent=True x_mm=-1.000000 z_mm=+0.000000
+x- after: gen=55 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+x- observed: dx_mm=-1.000000 dz_mm=+0.000000 dx_counts=-50 dz_counts=+0
+z+ before: gen=60 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z+ commanded: mode=feed sent=True x_mm=+0.000000 z_mm=+1.000000
+z+ after: gen=74 tick=0 x_mm=+0.000000 z_mm=+1.000000 x_counts=+0 z_counts=+100 rpm=0
+z+ observed: dx_mm=+0.000000 dz_mm=+1.000000 dx_counts=+0 dz_counts=+100
+z- before: gen=79 tick=0 x_mm=+0.000000 z_mm=+1.000000 x_counts=+0 z_counts=+100 rpm=0
+z- commanded: mode=feed sent=True x_mm=+0.000000 z_mm=-1.000000
+z- after: gen=93 tick=0 x_mm=+0.000000 z_mm=+0.000000 x_counts=+0 z_counts=+0 rpm=0
+z- observed: dx_mm=+0.000000 dz_mm=-1.000000 dx_counts=+0 dz_counts=-100

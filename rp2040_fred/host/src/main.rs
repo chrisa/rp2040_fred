@@ -5,6 +5,7 @@ use std::io::BufReader;
 
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
+use fredctl::spindle::{self, SpindleDirection};
 use fredctl::transport::{UsbRole, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlock, CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
@@ -28,6 +29,7 @@ fn main() -> io::Result<()> {
         ("cycle-move", "usb") => motion_usb(MotionStart::CycleStart, MotionOptions::parse(args)?),
         ("cycle-start", "usb") => cycle_start_usb(),
         ("tool", "usb") => tool_usb(ToolOptions::parse(args)?),
+        ("spindle", "usb") => spindle_usb(SpindleOptions::parse(args)?),
         ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
@@ -63,6 +65,8 @@ fn print_help() {
     eprintln!("  fredctl jog usb --mode feed --x-counts <diameter_delta> --z-counts <delta> --feed <value> --slew <value>");
     eprintln!("  fredctl cycle-start usb");
     eprintln!("  fredctl tool usb --current-station <1-8> --target-station <1-8> --slew <value> [--wait-complete]");
+    eprintln!("  fredctl spindle usb --start <forward|reverse> (--rpm <rpm>|--ssl <0-127>) [--wait-complete]");
+    eprintln!("  fredctl spindle usb --stop [--wait-complete]");
     eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
@@ -142,6 +146,33 @@ fn tool_usb(options: ToolOptions) -> io::Result<()> {
         options.target_station,
         options.step_count()
     );
+
+    if options.wait_complete {
+        wait_controller_idle(&mut t, seq)?;
+        println!("controller idle");
+    }
+    Ok(())
+}
+
+fn spindle_usb(options: SpindleOptions) -> io::Result<()> {
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Master)?;
+    t.set_timeout(Duration::from_millis(1000));
+
+    let request = options.command_request()?;
+    let seq = send_command_request(&mut t, 1, request)?;
+
+    match options.command {
+        SpindleCommand::Start(direction) => {
+            println!(
+                "sent spindle start: direction={} ssl={}",
+                direction.label(),
+                request.block.m9
+            );
+        }
+        SpindleCommand::Stop => {
+            println!("sent spindle stop");
+        }
+    }
 
     if options.wait_complete {
         wait_controller_idle(&mut t, seq)?;
@@ -519,6 +550,104 @@ impl ToolOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SpindleCommand {
+    Start(SpindleDirection),
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpindleOptions {
+    command: SpindleCommand,
+    rpm: Option<f32>,
+    speed_code: Option<u16>,
+    wait_complete: bool,
+}
+
+impl SpindleOptions {
+    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
+        let mut args = args;
+        let mut command = None;
+        let mut rpm = None;
+        let mut speed_code = None;
+        let mut wait_complete = false;
+
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--start" => {
+                    if command.is_some() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "only one spindle command may be specified",
+                        ));
+                    }
+                    command = Some(SpindleCommand::Start(parse_spindle_direction(&next_arg(
+                        &mut args, "--start",
+                    )?)?));
+                }
+                "--stop" => {
+                    if command.is_some() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "only one spindle command may be specified",
+                        ));
+                    }
+                    command = Some(SpindleCommand::Stop);
+                }
+                "--rpm" => rpm = Some(parse_f32("--rpm", &next_arg(&mut args, "--rpm")?)?),
+                "--ssl" => speed_code = Some(parse_u16("--ssl", &next_arg(&mut args, "--ssl")?)?),
+                "--wait-complete" => wait_complete = true,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown spindle option: {arg}"),
+                    ));
+                }
+            }
+        }
+
+        let command = command.ok_or_else(|| missing_option("--start or --stop"))?;
+        match command {
+            SpindleCommand::Start(_) => {
+                if rpm.is_none() && speed_code.is_none() {
+                    return Err(missing_option("--rpm or --ssl"));
+                }
+            }
+            SpindleCommand::Stop => {
+                if rpm.is_some() || speed_code.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--rpm and --ssl are only valid with --start",
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            command,
+            rpm,
+            speed_code,
+            wait_complete,
+        })
+    }
+
+    fn command_request(self) -> io::Result<CommandBlockRequest> {
+        match self.command {
+            SpindleCommand::Start(direction) => {
+                let speed_code = match self.speed_code {
+                    Some(speed_code) => {
+                        spindle::validate_speed_code(speed_code)?;
+                        speed_code
+                    }
+                    None => spindle::speed_code_from_rpm(self.rpm.unwrap_or(0.0))?,
+                };
+                spindle::spindle_start_request(direction, speed_code)
+            }
+            SpindleCommand::Stop => Ok(spindle::spindle_stop_request()),
+        }
+    }
+}
+
 fn rapid_command_block(
     x_diameter_counts: i32,
     z_counts: i32,
@@ -608,6 +737,15 @@ fn parse_u16(option: &str, value: &str) -> io::Result<u16> {
     })
 }
 
+fn parse_f32(option: &str, value: &str) -> io::Result<f32> {
+    value.parse::<f32>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid {option} value: {value}"),
+        )
+    })
+}
+
 fn parse_station(option: &str, value: &str) -> io::Result<u8> {
     let station = value.parse::<u8>().map_err(|_| {
         io::Error::new(
@@ -624,6 +762,17 @@ fn parse_station(option: &str, value: &str) -> io::Result<u8> {
     }
 
     Ok(station)
+}
+
+fn parse_spindle_direction(value: &str) -> io::Result<SpindleDirection> {
+    match value {
+        "forward" | "fwd" => Ok(SpindleDirection::Forward),
+        "reverse" | "rev" => Ok(SpindleDirection::Reverse),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown spindle direction: {value}"),
+        )),
+    }
 }
 
 fn checked_x_radius_counts(x_diameter_counts: i32) -> io::Result<i16> {
@@ -791,7 +940,14 @@ fn sample_is_fcf0_read(sample: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{raw_word, turret_step_count, MotionOptions, MoveMode, ToolOptions};
+    use super::{
+        raw_word, turret_step_count, MotionOptions, MoveMode, SpindleCommand, SpindleOptions,
+        ToolOptions,
+    };
+    use fredctl::spindle::{
+        SpindleDirection, SPINDLE_START_FORWARD_SUBCODE, SPINDLE_START_REVERSE_SUBCODE,
+        SPINDLE_STOP_SUBCODE,
+    };
 
     fn rapid_options() -> MotionOptions {
         MotionOptions {
@@ -928,5 +1084,66 @@ mod tests {
         .expect("tool blocks");
 
         assert!(requests.is_empty());
+    }
+
+    #[test]
+    fn spindle_reverse_start_options_match_capture() {
+        let request = SpindleOptions {
+            command: SpindleCommand::Start(SpindleDirection::Reverse),
+            rpm: None,
+            speed_code: Some(125),
+            wait_complete: false,
+        }
+        .command_request()
+        .expect("spindle start");
+
+        assert_eq!(request.block.m1, 0);
+        assert_eq!(request.block.m2, SPINDLE_START_REVERSE_SUBCODE);
+        assert_eq!(request.block.m9, 125);
+        assert_eq!(request.flags, 0);
+    }
+
+    #[test]
+    fn spindle_forward_start_options_use_inferred_subcode() {
+        let request = SpindleOptions {
+            command: SpindleCommand::Start(SpindleDirection::Forward),
+            rpm: Some(3000.0),
+            speed_code: None,
+            wait_complete: false,
+        }
+        .command_request()
+        .expect("spindle start");
+
+        assert_eq!(request.block.m1, 0);
+        assert_eq!(request.block.m2, SPINDLE_START_FORWARD_SUBCODE);
+        assert_eq!(request.block.m9, 125);
+    }
+
+    #[test]
+    fn spindle_stop_options_match_capture() {
+        let request = SpindleOptions {
+            command: SpindleCommand::Stop,
+            rpm: None,
+            speed_code: None,
+            wait_complete: false,
+        }
+        .command_request()
+        .expect("spindle stop");
+
+        assert_eq!(request.block.m1, 0);
+        assert_eq!(request.block.m2, SPINDLE_STOP_SUBCODE);
+        assert_eq!(request.block.m9, 0);
+    }
+
+    #[test]
+    fn spindle_start_parse_requires_speed_source() {
+        let err = SpindleOptions::parse(
+            ["--start", "forward"]
+                .into_iter()
+                .map(std::string::ToString::to_string),
+        )
+        .expect_err("missing speed source");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

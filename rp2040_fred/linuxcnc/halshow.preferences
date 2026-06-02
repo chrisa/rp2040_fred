@@ -1,0 +1,37 @@
+# Halshow settings
+# This file is generated automatically.
+wm geometry . 700x712+1085+79
+placeFrames 0.3953488372093023
+set ::ratio 0.3953488372093023
+set ::old_w_leftf 160
+set ::watchlist {
+    pin+tcl125.spindle-at-speed
+    pin+tcl125.spindle-fwd
+    pin+tcl125.spindle-rev
+    pin+tcl125.spindle-rpm
+    pin+tcl125.spindle-speed-cmd
+    pin+tcl125.x-pos-cmd
+    pin+tcl125.x-pos-fb
+    pin+tcl125.z-pos-cmd
+    pin+tcl125.z-pos-fb
+    pin+spindle.0.at-speed
+    pin+spindle.0.forward
+    pin+spindle.0.on
+    pin+spindle.0.revs
+    pin+spindle.0.speed-in
+    pin+spindle.0.speed-out
+    pin+spindle.0.locked
+    pin+spindle.0.inhibit
+    pin+spindle.0.index-enable
+    sig+Xhomesw
+    sig+Zhomesw
+    sig+Xhomeswpos
+    sig+Zhomeswpos
+}
+set ::workmode watchhal
+set ::watchInterval 100
+set ::col1_width 100
+set ::ffmts 
+set ::ifmts 
+set ::alwaysOnTop 0
+set ::autoSaveWatchlist 1

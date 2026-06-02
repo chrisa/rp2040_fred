@@ -1,11 +1,12 @@
 use std::io;
 use std::time::Duration;
 
-use fredctl::monitor::{FredMonitorClient, MonitorSnapshot, Calibration};
+use fredctl::monitor::{Calibration, FredMonitorClient, MonitorSnapshot};
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
+use rp2040_fred_protocol::bridge_proto::ControllerStatus;
 
 create_exception!(_fred_native, FredProtocolError, PyRuntimeError);
 create_exception!(_fred_native, FredUsbError, PyRuntimeError);
@@ -54,9 +55,86 @@ impl FredUsbClient {
         snapshot_to_dict(py, snapshot)
     }
 
+    #[pyo3(signature = (timeout_ms=0))]
+    fn refresh_timeout<'py>(
+        &mut self,
+        py: Python<'py>,
+        timeout_ms: u64,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let snapshot = self.with_client(py, move |client| {
+            client.refresh_timeout(Duration::from_millis(timeout_ms))
+        })?;
+        snapshot
+            .map(|snapshot| snapshot_to_dict(py, snapshot))
+            .transpose()
+    }
+
     fn next_snapshot<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let snapshot = self.with_client(py, FredMonitorClient::next_snapshot)?;
         snapshot_to_dict(py, snapshot)
+    }
+
+    fn latest_snapshot<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let snapshot = self.with_client(py, |client| Ok(client.latest()))?;
+        snapshot
+            .map(|snapshot| snapshot_to_dict(py, snapshot))
+            .transpose()
+    }
+
+    #[pyo3(signature = (*, x_mm=0.0, z_mm=0.0, slew=61, wait=false))]
+    fn rapid_move_delta(
+        &mut self,
+        py: Python<'_>,
+        x_mm: f32,
+        z_mm: f32,
+        slew: u16,
+        wait: bool,
+    ) -> PyResult<bool> {
+        self.with_client(py, move |client| {
+            client.rapid_move_delta_mm(x_mm, z_mm, slew, wait)
+        })
+    }
+
+    #[pyo3(signature = (*, x_mm=0.0, z_mm=0.0, feed=100, slew=61, wait=false))]
+    fn feed_move_delta(
+        &mut self,
+        py: Python<'_>,
+        x_mm: f32,
+        z_mm: f32,
+        feed: u32,
+        slew: u16,
+        wait: bool,
+    ) -> PyResult<bool> {
+        self.with_client(py, move |client| {
+            client.feed_move_delta_mm(x_mm, z_mm, feed, slew, wait)
+        })
+    }
+
+    fn controller_status<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let status = self.with_client(py, FredMonitorClient::controller_status)?;
+        status_to_dict(py, status)
+    }
+
+    #[pyo3(signature = (timeout_ms=None))]
+    fn wait_idle(&mut self, py: Python<'_>, timeout_ms: Option<u64>) -> PyResult<()> {
+        self.with_client(py, move |client| {
+            client.wait_idle(timeout_ms.map(Duration::from_millis))
+        })
+    }
+
+    #[pyo3(signature = (*, on, rpm=0.0, forward=true, ssl=None, wait=false))]
+    fn set_spindle(
+        &mut self,
+        py: Python<'_>,
+        on: bool,
+        rpm: f32,
+        forward: bool,
+        ssl: Option<u16>,
+        wait: bool,
+    ) -> PyResult<bool> {
+        self.with_client(py, move |client| {
+            client.set_spindle(on, rpm, forward, ssl, wait)
+        })
     }
 
     fn close(&mut self, py: Python<'_>) {
@@ -107,7 +185,17 @@ fn snapshot_to_dict<'py>(
     dict.set_item("x_counts", snapshot.x_counts)?;
     dict.set_item("z_counts", snapshot.z_counts)?;
     dict.set_item("tick", snapshot.tick)?;
+    dict.set_item("generation", snapshot.generation)?;
     dict.set_item("flags", snapshot.flags)?;
+    Ok(dict)
+}
+
+fn status_to_dict<'py>(py: Python<'py>, status: ControllerStatus) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("flags", status.flags)?;
+    dict.set_item("pending_count", status.pending_count)?;
+    dict.set_item("idle", status.is_idle())?;
+    dict.set_item("error", status.has_error())?;
     Ok(dict)
 }
 

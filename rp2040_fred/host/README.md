@@ -4,8 +4,10 @@ fredctl (Host Bring-Up Tool)
 Status
 - Shared bridge packet protocol in `rp2040-fred-protocol`.
 - Firmware-side bridge service with request handling, telemetry event generation, and queued controller work.
-- Host CLI for live USB monitor, capture, cycle-start, and motion tests.
+- Host library and CLI for live USB monitor, capture, cycle-start, motion,
+  tool-change, and spindle tests.
 - `usb` transport is implemented with `rusb` against role-specific vendor bulk interfaces.
+- Python/PyO3 consumes the host library so LinuxCNC can use one master USB connection for feedback, status, and jog commands.
 
 Usage (usb mode)
 - `cargo run --offline -- monitor usb`
@@ -14,6 +16,9 @@ Usage (usb mode)
 - `cargo run --offline -- jog usb --mode rapid --x-counts 0 --z-counts 100 --slew 61`
 - `cargo run --offline -- jog usb --mode feed --x-counts 0 --z-counts 100 --feed 100 --slew 61`
 - `cargo run --offline -- tool usb --current-station 1 --target-station 2 --slew 61 --wait-complete`
+- `cargo run --offline -- spindle usb --start reverse --ssl 125 --wait-complete`
+- `cargo run --offline -- spindle usb --start forward --rpm 3000 --wait-complete`
+- `cargo run --offline -- spindle usb --stop --wait-complete`
 - `cargo run --offline -- cycle-start usb`
 - `cargo run --offline -- capture usb`
 
@@ -23,7 +28,7 @@ Notes
 - Default USB target is `VID=0x2E8A`, `PID=0x000A`.
 - Firmware exposes two vendor-specific USB interfaces: master protocol `0x01` for monitor/motion/controller commands, and capture protocol `0x02` for passive trace streaming.
 - Firmware still has a startup-selected passive transport; in that mode `capture usb` uses the capture interface, while motion/controller commands are not available.
-- Because the host claims the master and capture interfaces separately, `capture usb` can run in one process while `monitor usb`, `cycle-move usb`, `jog usb`, `cycle-start usb`, or `tool usb` runs in another.
+- Because the host claims the master and capture interfaces separately, `capture usb` can run in one process while `monitor usb`, `cycle-move usb`, `jog usb`, `cycle-start usb`, `tool usb`, or `spindle usb` runs in another.
 - `cycle-move usb` waits for the observed cycle-start/continue condition (`FCF0 & 0x10 == 0`) before sending one low-level `CommandBlock`.
 - `jog usb` sends the same low-level `CommandBlock` immediately for remote-jog testing.
 - X deltas are entered as diameter counts and must be even because the controller payload uses radius counts.
@@ -35,7 +40,15 @@ Notes
 - `tool usb` implements the CNCMAK1 automatic turret path for `M06 ... K=<station>`.
   It needs the current station because the old host tracks `C%` locally and emits relative turret motion.
 - Tool number `I` and turret station `K` are separate in the old host; `tool usb` moves/selects the physical turret station, not a host-side tool offset record.
+- `spindle usb` implements the captured `do(0,3/4/5,...)` spindle family:
+  `m2=3` starts reverse, `m2=4` starts forward, and `m2=5` stops.  `--ssl`
+  sends the raw old-host speed code; `--rpm` converts approximately as
+  `SSL = rpm / 24` and caps at 127.
 - Conversion constants currently default to:
   - `x_counts_per_mm = 100`
   - `z_counts_per_mm = 100`
   and should be calibrated against real machine movement.
+- LinuxCNC jog-first integration uses immediate rapid deltas from the Python layer.
+  The userspace HAL component coalesces changing `motor-pos-cmd` targets and only keeps one controller command active at a time.
+- Spindle command pins are wired through LinuxCNC and send start/stop blocks
+  through the same queued controller command path as motion and tool change.

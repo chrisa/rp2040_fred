@@ -148,7 +148,7 @@ impl UsbTransport {
         self.timeout = timeout;
     }
 
-    fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
+    pub fn write_packet(&mut self, pkt: &Packet) -> io::Result<()> {
         let raw = pkt.encode();
         let expected = pkt.encoded_len();
         let n = self

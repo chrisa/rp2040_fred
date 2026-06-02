@@ -16,8 +16,11 @@ Short conclusion
 The original software observes cycle start / continue through FCF0 raw bit 4
 going low.  In the raw trace this appears as rare FCF0 values 2C and 2D.
 
-The current firmware PROCcont experiment is waiting on the wrong bits.  It
-waits for raw bits 2 and 3 to clear.  The BASIC masks do not map that way:
+2026-06-02 hardware testing validated this interpretation: the current firmware
+can wait for cycle-start/continue by checking `FCF0 & 0x10 == 0`.
+
+The earlier firmware PROCcont experiment waited on the wrong bits.  It waited
+for raw bits 2 and 3 to clear.  The BASIC masks do not map that way:
 OSBYTE &92 returns the read byte in the USR return's Y-register field, so:
 
     BASIC mask &10000   -> raw bit 0
@@ -175,11 +178,11 @@ wait.
 Firmware implication
 --------------------
 
-A faithful PROCcont-style wait should service feedback like PROCF and wait for:
+A faithful PROCcont-style wait services feedback like PROCF and waits for:
 
     FCF0 & 0x10 == 0
 
-That is the observed cycle-start/continue condition.
+That is the observed and now hardware-validated cycle-start/continue condition.
 
 Raw bit 5 may still matter for a stop/hold/reset phase, but it was never
 observed low in this capture.  It should be logged, not hard-required, until a

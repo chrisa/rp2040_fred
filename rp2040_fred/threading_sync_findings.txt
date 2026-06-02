@@ -4,6 +4,19 @@ Threading Spindle Sync Findings
 Date
 - 2026-04-23
 
+Hardware validation update
+- 2026-06-02:
+  - Current RP2040 firmware and host code can issue accepted rapid moves using
+    `opcode 0`.
+  - Accepted feed-rate moves use `opcode 1` with `m8 = INT(95000 / F)`.
+  - Accepted automatic turret/tool-change motion uses the same timed
+    `opcode 1` family through `m5`, as a three-command relative turret
+    sequence.
+  - Waiting for operator cycle-start/continue works by observing
+    `FCF0 & 0x10 == 0`.
+  - These tests confirm the decoded `PROCdo` register layout and the
+    old-host-style command-block handshake as the basis for low-level control.
+
 Question
 - During the threading run in `make.cap` / `rp2040_fred/host/make.decoded`, is spindle sync entered by a specific bus command from the host, or is it entirely handled inside the lathe-side canned cycle?
 
@@ -307,9 +320,12 @@ Opcode `0`
 Opcode `0` subcodes for spindle control
 - `do(0,5,0,0,0,0,0,0,0,0)` appears in the `M05` path.
 - `do(0,X(2),0,0,0,0,0,0,SSL,0)` is used when `X(2)` is `3` or `4`, matching `M03` / `M04`.
+- `disk/CNCMAK1.decoded.txt` swaps `M03`/`M04` before emitting the block
+  (`IF X(2)=3 THEN X(2)=4 ELSE X(2)=3`), so the on-wire subcode is not the
+  user-facing M-code number.  See `spindle.txt`.
 - Therefore:
-  - `m1=0, m2=3` -> spindle start forward with speed in `m9`
-  - `m1=0, m2=4` -> spindle start reverse with speed in `m9`
+  - `m1=0, m2=3` -> spindle start reverse with speed code `SSL` in `m9`
+  - `m1=0, m2=4` -> spindle start forward with speed code `SSL` in `m9`
   - `m1=0, m2=5` -> spindle stop
 
 Opcode `1`
@@ -400,13 +416,14 @@ Candidate G01 straight feed block
 
 Implementation implication
 - Replacement host code can first expose low-level single-block sending:
-  - rapid maps to opcode `0`
-  - straight feed maps to opcode `1`
+  - rapid maps to opcode `0` (confirmed by hardware)
+  - straight feed maps to opcode `1` (confirmed by hardware)
+  - automatic turret/tool-change also uses the timed `opcode 1` family through
+    the `m5` auxiliary field (confirmed by hardware)
 - Full G-code parsing, arcs, canned cycles, threading expansion, and tool-change generation can build on the same `CommandBlock` path later.
 
 Validation still needed
 - Confirm safe/default values for `slew_limit` / `SSL`.
-- Confirm G01 `INT(95000/F)` timing with a controlled slow Z-only physical move.
 - Capture the emitted bus sequence for small G00/G01 trials and compare against the register map above.
 
 
@@ -429,16 +446,16 @@ Current interpretation
 - This looks like an operator cycle-start / running-state interlock rather than part of each low-level motion block.
 - `PROCdo` itself does not wait for those masks; it writes the `FC92..FCA5` block, runs the normal busy wait, then writes `FCAF=00`.
 - Physical test note:
-  - The current `PROCcont` mask mapping has an effect on the controller, but it did not complete under observed button presses.
-  - Firmware now treats `PROCcont` as an experiment with a timeout/error flag rather than an unbounded wait, so failed trials should not permanently strand feedback polling.
-  - `arm-wait usb --suspend-polling` is available to test the old-host-like no-position-polling path explicitly.
+  - The corrected `PROCcont` mapping is validated: cycle-start/continue is
+    observed as `FCF0` raw bit 4 low, i.e. `FCF0 & 0x10 == 0`.
+  - Firmware treats the wait as bounded work with timeout/error reporting, so a
+    failed wait cannot permanently strand feedback polling.
 
 Implementation implication
-- Command-block sequencing:
-  - payload
-  - `FC80=00`
-  - wait for `FCF0` ready
-  - read `FCF1`
-  - `FCAF=00`
-- Host-side `arm` should queue the two pre-prompt `do(0,0,...)` blocks, then queue the `PROCcont` wait.
-- If the `XX` / `Z` values are not yet known for an experiment, send zero deltas first to test whether the setup side effect is independent of the visible move distance.
+- Command-block sequencing is now the old-host `PROCdo` sequence:
+  - wait for `FCF0` raw bit 0 clear before each payload byte
+  - read the target register, then write it
+  - service feedback in the `PROCbusy` loop until `FCF0` raw bit 7 clears
+  - clear/acknowledge with gated `FCAF=00`
+- Remote jog does not need `PROCcont`; it sends the same low-level command
+  block immediately unless the caller explicitly asks for cycle-start waiting.
