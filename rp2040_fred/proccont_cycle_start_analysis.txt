@@ -1,0 +1,208 @@
+PROCcont / cycle-start analysis
+2026-06-02
+
+Scope
+-----
+
+This follows up the open question in motion_command_acceptance_analysis.txt:
+
+* What does PROCcont actually test?
+* How does the original software observe the operator pressing cycle start?
+* Do the full_make traces show repeated instances of that observation?
+
+Short conclusion
+----------------
+
+The original software observes cycle start / continue through FCF0 raw bit 4
+going low.  In the raw trace this appears as rare FCF0 values 2C and 2D.
+
+The current firmware PROCcont experiment is waiting on the wrong bits.  It
+waits for raw bits 2 and 3 to clear.  The BASIC masks do not map that way:
+OSBYTE &92 returns the read byte in the USR return's Y-register field, so:
+
+    BASIC mask &10000   -> raw bit 0
+    BASIC mask &100000  -> raw bit 4
+    BASIC mask &200000  -> raw bit 5
+    BASIC mask &800000  -> raw bit 7
+
+This also corrects the earlier write-gate interpretation: PROCS waits raw bit 0
+clear before every write, not raw bit 7 clear.
+
+The observed cycle-start/continue windows are:
+
+    initial prompt: 757.279359s to 757.447381s
+    tool change 1: 1012.459583s to 1012.720736s
+    tool change 2: 1258.596926s to 1258.890405s
+    tool change 3: 1357.605847s to 1357.670660s
+
+Each one lines up with a long operator wait and the next command block starting
+inside or shortly after the raw-bit-4-low burst.
+
+Decoded PROCcont
+----------------
+
+disk/CNCMAK1.decoded.txt has:
+
+    310: DEF FNst=FNR(&F0)
+    320: DEF PROCcont:PROCF:runs%=0:
+         IF (FNst AND &200000)=0 THEN runs%=2
+    340: IF runs%=2 THEN run%=FALSE:?&CF5=1
+    350: REPEAT:PROCF:runs%=0:
+         IF (FNst AND &100000)=0 THEN runs%=2
+    370: IF runs%=2 THEN run%=TRUE:?&CF5=0
+    380: UNTIL run%:ENDPROC
+
+BBC BASIC token A3 is FALSE and B9 is TRUE, so PROCcont is:
+
+1. Run one feedback/service pass with PROCF.
+2. Sample FCF0.
+3. If raw bit 5 is clear, set run% false and set &CF5.
+4. Loop, running PROCF and sampling FCF0.
+5. When raw bit 4 is clear, set run% true, clear &CF5, and exit.
+
+In this capture, raw bit 5 never goes low.  The first phase is therefore not
+active in the observed manufacturing flow.  The second phase is the real wait:
+PROCcont exits when raw bit 4 goes low.
+
+Why the mask mapping is direct
+------------------------------
+
+FNR is:
+
+    DEF FNR(x%):A%=&92:X%=x%:r%=USR(&FFF4):=r%
+
+PROCS is:
+
+    DEF PROCS(XX%,YY%):
+      REPEAT T%=FNR(&F0): UNTIL (T% AND &10000)=0
+      A%=&93:X%=XX%:Y%=YY%:CALL &FFF4
+
+OSBYTE &92 reads a controller register and returns the read byte in the
+Y-register field of the BASIC USR return value.  Therefore mask &10000 is raw
+bit 0, not bit-reversed raw bit 7.
+
+The raw trace confirms this.  The FCF0 value immediately before FC92..FCA5
+writes is:
+
+    2C   17 times
+    3C  418 times
+    BC 2825 times
+
+All three values have raw bit 0 clear.  BC has raw bit 7 set, so the write gate
+cannot be raw bit 7.
+
+This mapping makes PROCcont consistent:
+
+    &200000 -> raw bit 5
+    &100000 -> raw bit 4
+
+All observed FCF0 values keep raw bit 5 high, while the rare 2C/2D bursts clear
+raw bit 4 exactly at the operator-wait points.
+
+Tool-change path
+----------------
+
+The tool-change wait is easy to miss if looking only at the decoded disk BASIC.
+disk/CNCMAK1.decoded.txt line 700-770 shows PROCt calling:
+
+    *PLONKT
+    *PLONKF
+    PROCP
+    *PLONKWA
+
+The disassembly explains the hidden wait.  tcl202.asm dispatches PLONK A/B/E/F
+through the fallback handler; PLONKF selects the embedded BASIC block at $8A00.
+That embedded block contains the tool-change prompt text:
+
+    CHANGE TO TOOL ... THEN PRESS CYCLE START
+
+and then:
+
+    run%=FALSE:PROCcont:?&65=0:*PLONKOFF
+
+So the initial PRESS START CYCLE prompt and the later tool-change prompts all
+use the same PROCcont status wait.
+
+Observed button/continue windows
+--------------------------------
+
+The full raw trace contains only these FCF0 raw-bit-4-low groups.  Groups 3-5
+are adjacent zero-time/tiny transients around the same second tool-change press,
+so they are treated as one operator event.
+
+    low#1  757.279359s to 757.447381s
+           2C:45, 2D:12989
+
+    low#2  1012.459583s to 1012.720736s
+           2C:21, 2D:4361
+
+    low#3  1258.596926s to 1258.890405s
+           2C:30, 2D:6049 total after merging adjacent fragments
+
+    low#4  1357.605847s to 1357.670660s
+           2C:22, 2D:5172
+
+Correlation to command blocks:
+
+    initial prompt
+      previous block #002 cleared at 748.104966s
+      bit 4 low from 757.279359s to 757.447381s
+      next block #003 starts at 757.856906s
+      observed wait after #002 clear: 9.174s until bit 4 low
+
+    tool change 1
+      previous tool block #045 cleared at 1001.127958s
+      bit 4 low from 1012.459583s to 1012.720736s
+      next block #046 starts at 1012.609562s
+      observed wait after #045 clear: 11.332s until bit 4 low
+
+    tool change 2
+      previous tool block #112 cleared at 1253.391387s
+      bit 4 low from 1258.596926s to 1258.890405s
+      next block #113 starts at 1258.758883s
+      observed wait after #112 clear: 5.206s until bit 4 low
+
+    tool change 3
+      previous tool block #137 cleared at 1354.136955s
+      bit 4 low from 1357.605847s to 1357.670660s
+      next block #138 starts at 1357.781510s
+      observed wait after #137 clear: 3.469s until bit 4 low
+
+There is no comparable raw-bit-4-low burst in the later #160 -> #161 gap.  That
+gap is therefore more likely ordinary motion/program timing, not a cycle-start
+wait.
+
+Firmware implication
+--------------------
+
+A faithful PROCcont-style wait should service feedback like PROCF and wait for:
+
+    FCF0 & 0x10 == 0
+
+That is the observed cycle-start/continue condition.
+
+Raw bit 5 may still matter for a stop/hold/reset phase, but it was never
+observed low in this capture.  It should be logged, not hard-required, until a
+trace shows it changing.
+
+Remote jog implication
+----------------------
+
+Cycle start is not a host command strobe in this trace.  It is a physical/input
+status condition observed by reading FCF0.  For our replacement host, remote jog
+does not need to reproduce that wait unless we intentionally want manufacturing
+program semantics.
+
+For remote jog:
+
+1. Do not call PROCcont.
+2. Send a PROCdo-style command block through the per-byte raw-bit-0 write gate.
+3. Keep PROCF-equivalent service traffic alive while waiting for completion.
+4. Use safety/interlock/ready checks, but do not require raw bit 4 to go low as
+   a jog precondition unless testing shows the controller refuses jog motion
+   without it.
+
+If the goal is to make the original BBC software continue without the user
+pressing the physical button, that is a different problem: it would require
+making the software see FCF0 raw bit 4 low, either by hardware/input intervention
+or by spoofing FCF0 reads.  Our own host can simply avoid that software wait.

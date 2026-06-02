@@ -1,0 +1,297 @@
+Motion command acceptance analysis
+2026-06-02
+
+Scope
+-----
+
+Inputs used:
+
+* threading_sync_findings.txt
+* host/full_make.txt
+* host/full_make_raw.txt
+* host/filter_trace.py
+* disk/CNCMAK1.decoded.txt
+* current host/firmware transport code
+
+Short conclusion
+----------------
+
+The most likely reason our motion commands are being ignored is that our command
+block writer is not emulating the original BASIC write protocol closely enough.
+
+The old software does not just wait for the normal busy bit once, then blast
+FC92..FCA5.  Every individual command-block byte write is gated by a fresh
+status read:
+
+    DEF PROCS(XX%,YY%):
+      REPEAT T%=FNR(&F0): UNTIL (T% AND &10000)=0
+      A%=&93:X%=XX%:Y%=YY%:CALL &FFF4
+
+That maps, in the raw trace, to waiting until FCF0 raw bit 0 is clear before
+each register write.  The raw trace shows this directly: before each FC92..FCA5
+read/write pair the host reads FCF0, then reads the target register, then writes
+the target register.  The FCF0 values immediately preceding FC92..FCA5 writes
+are 2C, 3C, and BC; all have raw bit 0 clear.
+
+Our current firmware write_command_block() waits only for raw FCF0 bit 0 to
+clear once, then writes the whole block.  If the controller only latches writes
+during raw bit-0-clear windows, most or all later bytes can be ignored.
+
+The second likely problem is the assumed "submit" sequence.  The old software
+does not load a block and immediately strobe a fixed FC80=00 command.  After a
+normal PROCdo block, it runs PROCbusy, which keeps the normal feedback/service
+traffic moving until raw FCF0 bit 7 clears, and only then writes FCAF=00 through
+the same raw-bit-0 write gate.  The first FC80 command after a command block
+varies with the background feedback
+sequence; it is not consistently 00.
+
+Remote jog should be possible at the low-level protocol layer, but it should be
+implemented as a PROCdo-style command block sender, not as the manufacturing
+program's PRESS START CYCLE / PROCcont flow.  Cycle start appears to be part of
+the CNCMAK1 operator/program synchronization path, not necessarily a required
+precondition for every low-level command block.  Machine safety interlocks and
+ready state still need to be respected.
+
+Original BASIC details
+----------------------
+
+disk/CNCMAK1.decoded.txt has the key routines.
+
+Line 390:
+
+    DEF PROCS(XX%,YY%): REPEAT T%=FNR(&F0):
+    UNTIL (T% AND &10000)=0 :
+    A%=&93:X%=XX%:Y%=YY%:CALL &FFF4:ENDPROC
+
+This is the per-byte write gate.  Each low-level write waits on FNR(&F0) mask
+&10000 before doing the OSBYTE-style register access.
+
+Line 410:
+
+    DEF FNR(x%):A%=&92:X%=x%:r%=USR(&FFF4):=r%
+
+This is the status/register read helper used by PROCS and PROCbusy.
+
+Lines 420-450:
+
+    DEF PROCdo(...): ?&65=0
+    addr%=&92
+    PROCb(m1):PROCb(m2)
+    FOR ax%=3 TO 9:PROCaw(m%(ax%)):NEXT
+    PROCaw(m10 AND &FFFF):PROCaw(m10 DIV &10000)
+    IF ?&8F=0 THEN PROCbusy:?&65=0
+    addr%=&AF:PROCb(0):?&65=1:ENDPROC
+
+This gives the command-block layout:
+
+    FC92  m1 byte
+    FC93  m2 byte
+    FC94  m3 low byte
+    FC95  m3 high byte
+    FC96  m4 low byte
+    FC97  m4 high byte
+    FC98  m5 low byte
+    FC99  m5 high byte
+    FC9A  m6 low byte
+    FC9B  m6 high byte
+    FC9C  m7 low byte
+    FC9D  m7 high byte
+    FC9E  m8 low byte
+    FC9F  m8 high byte
+    FCA0  m9 low byte
+    FCA1  m9 high byte
+    FCA2  m10 low word low byte
+    FCA3  m10 low word high byte
+    FCA4  m10 high word low byte
+    FCA5  m10 high word high byte
+    FCAF  00 after PROCbusy, unless ?&8F suppresses PROCbusy
+
+Line 490:
+
+    DEF PROCbusy:?&65=1:
+    REPEAT:PROCF:in%=FNR(&F0):
+    UNTIL (in% AND &800000)=0:ENDPROC
+
+This is the normal command-complete wait.  In the raw trace, this corresponds
+to raw FCF0 bit 7 clearing.  A following PROCb/PROCS call still waits for raw
+bit 0 clear before writing FCAF=00.
+
+Line 480:
+
+    DEF PROCSPEED:addr%=&AD:PROCb(0)
+
+FCAD is also written through PROCb/PROCS, so it should use the same bit-0 write
+gate.
+
+Line 1000-1010:
+
+    PROCdo(...): PROCg: ... : PROCcont : PROCdo(84,...): PROCg
+
+Threading uses PROCcont between motion phases.  That does not make PROCcont the
+command-acceptance handshake for PROCdo itself; it is part of the higher-level
+manufacturing flow.
+
+Trace evidence
+--------------
+
+host/full_make.txt contains 163 complete FC92..FCA5 command blocks.
+
+The first two blocks occur before the initial PRESS START CYCLE wait:
+
+    #001 at 747.137452  (0,0,0,0,0,0,0,0,0,0)
+    #002 at 747.656428  (0,0,0,1000,0,0,0,0,0,0)
+
+Block #003 starts at 757.856906, about 9.75 seconds after block #002 was
+cleared.  That gap matches the initial operator prompt/user action.
+
+The full raw trace has these FCF0 read values:
+
+    BD  40,394,741 reads
+    3D   4,512,238 reads
+    BC     139,049 reads
+    2D      28,571 reads
+    3C      15,874 reads
+    2C         118 reads
+
+Useful bit interpretation from those values:
+
+    raw bit 0: per-byte write gate
+      set   = 3D, BD, 2D
+      clear = 3C, BC, 2C
+      BASIC mask: &10000 in PROCS
+
+    raw bit 4: cycle-start / continue input observed by PROCcont
+      high = 3C/3D/BC/BD
+      low  = 2C/2D
+      BASIC mask: &100000 in PROCcont
+
+    raw bit 5: first PROCcont phase input
+      high in every observed FCF0 value in this capture
+      BASIC mask: &200000 in PROCcont
+
+    raw bit 7: PROCbusy wait bit
+      clear = 3C, 3D, 2C, 2D
+      set   = BC, BD
+      BASIC mask: &800000 in PROCbusy
+
+The important raw pattern around the first command block is:
+
+    read FCF0 = 3C
+    read FC92
+    write FC92
+    read FCF0 = 3C
+    read FC93
+    write FC93
+    ...
+    read FCF0 = 3C
+    read FCA5
+    write FCA5
+
+So the original host waits for a write-ready window before every command byte.
+It also performs a read of the target register immediately before the write.
+That read-before-write may be an artifact of the old OSBYTE access path, but it
+is present in the real trace and should be emulated until proven unnecessary.
+Across the full raw trace, the FCF0 value immediately before FC92..FCA5 writes
+is 2C 17 times, 3C 418 times, and BC 2825 times; this confirms that the write
+gate is raw bit 0 clear, not raw bit 7 clear.
+
+After command blocks, the first subsequent FC80 write is not a fixed value.
+Across the parsed blocks the first observed FC80 command after block loading
+varies among 00, 01, 02, 03, 04, 05, 06, 07, 0C, and 0D.  That is consistent
+with PROCbusy continuing the normal PROCF feedback/service loop rather than
+issuing a dedicated FC80=00 submit strobe.
+
+Why current code can fail
+-------------------------
+
+firmware/src/transport/master/bus.rs currently has:
+
+    write_command_block():
+      poll_until(0xF0, 0x01)
+      write FC92..FCA5
+
+That waits only for raw bit 0 clear once.  It does not wait for raw bit 0 clear
+before each byte.  It also does not do the observed target-register read before
+write.
+
+The current code also has:
+
+    wait_proc_cont():
+      wait raw bit 2 clear
+      wait raw bit 3 clear
+
+That interpretation is not supported by the decoded BASIC or full raw trace.
+OSBYTE &92 returns the FCF0 byte in the USR return's Y-register field, so the
+BASIC PROCcont masks map to raw bit 5 (&200000) and raw bit 4 (&100000).  The
+button/continue observation in this capture is raw bit 4 going low, producing
+FCF0 values 2C/2D.
+
+Recommended low-level command sequence
+--------------------------------------
+
+For every old-host-style write to a controller register:
+
+1. Read FCF0 until raw bit 0 is clear.
+2. Read the target register.
+3. Write the target register.
+
+For a normal PROCdo command block:
+
+1. Write FC92..FCA5 using the per-byte raw-bit-0 gate.
+2. Keep the normal feedback/service cadence running, equivalent to PROCF.
+3. Continue until raw FCF0 bit 7 clears, matching PROCbusy.
+4. Write FCAF=00 using the same per-byte raw-bit-0 gate.
+
+This should be tested before changing higher-level motion semantics.  If this
+causes existing motion blocks to be accepted, the main bug was command-block
+latching, not the motion payload encoding.
+
+The safest firmware change is to add a helper equivalent to BASIC PROCS and
+use it for:
+
+    FC92..FCA5 command block bytes
+    FCAD speed/update writes
+    FCAF command-clear writes
+    any other writes that correspond to BASIC PROCb/PROCaw/PROCS
+
+Remote jog implication
+----------------------
+
+Remote jog should avoid the manufacturing program's PROCcont path.  A jog can
+be represented as a direct PROCdo-style command block with small axis deltas or
+the appropriate motion opcode, sent through the old-host write gate and waited
+with PROCbusy semantics.
+
+That means remote jog probably does not need the operator to press cycle start,
+provided:
+
+* the machine is in a ready state,
+* safety/interlock status permits motion,
+* the command block is written using the raw-bit-0 gate,
+* the command is followed by the normal busy/service cadence,
+* FCAF=00 is written after completion.
+
+The cycle-start prompt in CNCMAK1 appears to be a high-level program control
+checkpoint.  The original program loads two initial blocks before the first
+prompt, then waits for the operator before continuing the manufacturing flow.
+That does not prove the controller requires cycle start for every low-level
+motion command.
+
+Open questions
+--------------
+
+The exact decoded meaning of PROCcont is now mostly resolved by the follow-up
+pass.  The BASIC masks &200000 and &100000 map to raw bits 5 and 4 respectively,
+not raw bits 2 and 3.  The rare raw 2C/2D states, where bit 4 is low, are the
+observed cycle-start/continue signal in this capture.  The exact semantic name
+for the bit-5 phase is still open; bit 5 never went low in this run.
+
+It is also not yet proven whether the target-register read before each write is
+semantically required or merely an artifact of the BBC OSBYTE/USR bridge.  Since
+the trace shows it every time, emulating it is the conservative next test.
+
+The first implementation target should be command acceptance, not PROCcont.
+Once gated writes are in place, test a harmless zero/small jog block and inspect
+whether the command follows the original trace shape: per-byte raw-bit-0 write
+gates, PROCbusy service until raw bit 7 clears, then FCAF through the raw-bit-0
+gate.
