@@ -1,5 +1,9 @@
 pub const PACKET_MAGIC: u8 = 0xA5;
 pub const PROTOCOL_VERSION: u8 = 5;
+pub const USB_VENDOR_CLASS: u8 = 0xFF;
+pub const USB_VENDOR_SUBCLASS: u8 = 0x00;
+pub const USB_PROTOCOL_MASTER: u8 = 0x01;
+pub const USB_PROTOCOL_CAPTURE: u8 = 0x02;
 pub const HEADER_SIZE: usize = 8;
 pub const CRC_SIZE: usize = 4;
 pub const PAYLOAD_SIZE: usize = 305;

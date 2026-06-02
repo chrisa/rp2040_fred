@@ -6,13 +6,12 @@ use embassy_rp::multicore::Stack;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::spsc::{Consumer, Producer, Queue};
 use portable_atomic::{AtomicBool, AtomicU32, Ordering};
+use rp2040_fred_firmware::{log_info, log_warn};
 use static_cell::StaticCell;
 
 use crate::decoder::{FeedbackDecoder, FeedbackSnapshot};
 use crate::resources::{Core1Resources, DebugPin27Resources, DirectionResources, PioResources};
 use crate::transport::pio::passive::PassivePio;
-use crate::transport::GenericTransport;
-use crate::{log_info, log_warn};
 
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet, TRACE_SAMPLES_PER_PACKET};
 
@@ -111,37 +110,25 @@ impl PassiveTransport {
     }
 }
 
-impl GenericTransport for PassiveTransport {
-    fn handle_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
+impl PassiveTransport {
+    pub fn handle_master_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
         match req.msg_type {
             MsgType::Ping => {
                 out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
-                1
-            }
-            MsgType::CaptureSet => {
-                if req.payload_len < 1 {
-                    out[0] = Packet::nack(req.seq, MsgType::CaptureSet as u8, 1);
-                } else {
-                    self.telemetry_enabled = req.payload[0] == 0;
-                    self.capture_enabled = req.payload[0] != 0;
-                    TRACE_CAPTURE_ENABLED.store(self.capture_enabled, Ordering::Relaxed);
-                    self.reset_stream_state();
-                    out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
-                    log_info!(
-                        "telemetry_enabled: {} capture_enabled: {}",
-                        self.telemetry_enabled,
-                        self.capture_enabled
-                    );
-                }
                 1
             }
             MsgType::TelemetrySet => {
                 if req.payload_len < 1 {
                     out[0] = Packet::nack(req.seq, MsgType::TelemetrySet as u8, 1);
                 } else {
-                    self.capture_enabled = req.payload[0] == 0;
                     self.telemetry_enabled = req.payload[0] != 0;
-                    TRACE_CAPTURE_ENABLED.store(self.telemetry_enabled, Ordering::Relaxed); // weird, but must capture to decode
+                    if self.telemetry_enabled {
+                        self.capture_enabled = false;
+                    }
+                    TRACE_CAPTURE_ENABLED.store(
+                        self.telemetry_enabled || self.capture_enabled,
+                        Ordering::Relaxed,
+                    );
                     self.reset_stream_state();
                     if req.payload_len >= 3 {
                         self.telemetry_period_ms =
@@ -157,24 +144,55 @@ impl GenericTransport for PassiveTransport {
                 1
             }
             _ => {
-                if self.capture_enabled {
-                    out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x10);
-                    log_warn!("nacked 0x{:x} (capture enabled)", req.msg_type as u8);
-                } else {
-                    out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x11);
-                    log_warn!("nacked 0x{:x} (capture not enabled)", req.msg_type as u8);
-                }
+                out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x21);
+                log_warn!("nacked passive master request 0x{:x}", req.msg_type as u8);
                 1
             }
         }
     }
 
-    fn process_pending_work(&mut self, budget: usize) {
+    pub fn handle_capture_request(&mut self, req: &Packet, out: &mut [Packet; 2]) -> usize {
+        match req.msg_type {
+            MsgType::Ping => {
+                out[0] = Packet::ack(req.seq, MsgType::Ping, 0);
+                1
+            }
+            MsgType::CaptureSet => {
+                if req.payload_len < 1 {
+                    out[0] = Packet::nack(req.seq, MsgType::CaptureSet as u8, 1);
+                } else {
+                    self.capture_enabled = req.payload[0] != 0;
+                    if self.capture_enabled {
+                        self.telemetry_enabled = false;
+                    }
+                    TRACE_CAPTURE_ENABLED.store(
+                        self.telemetry_enabled || self.capture_enabled,
+                        Ordering::Relaxed,
+                    );
+                    self.reset_stream_state();
+                    out[0] = Packet::ack(req.seq, MsgType::CaptureSet, 0);
+                    log_info!(
+                        "telemetry_enabled: {} capture_enabled: {}",
+                        self.telemetry_enabled,
+                        self.capture_enabled
+                    );
+                }
+                1
+            }
+            _ => {
+                out[0] = Packet::nack(req.seq, req.msg_type as u8, 0x22);
+                log_warn!("nacked passive capture request 0x{:x}", req.msg_type as u8);
+                1
+            }
+        }
+    }
+
+    pub fn process_master_pending_work(&mut self, budget: usize) {
         if !self.telemetry_enabled {
             return;
         }
 
-        let mut processed = 0usize;
+        let mut processed = 0_usize;
         while processed < budget {
             let Some(sample) = self.trace_samples.dequeue() else {
                 break;
@@ -186,7 +204,7 @@ impl GenericTransport for PassiveTransport {
                     self.snapshot_valid = true;
                 }
                 Err(_e) => {
-                    // log_warn!("error from ingest_sample: {}", e);
+                    // Keep the last good snapshot.
                 }
             }
             self.sample_seq = self.sample_seq.wrapping_add(1);
@@ -194,69 +212,72 @@ impl GenericTransport for PassiveTransport {
         }
     }
 
-    fn poll_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
-        if self.capture_enabled {
-            let mut batch = [0u32; TRACE_SAMPLES_PER_PACKET];
-            let mut used = 0usize;
-
-            while used < batch.len() {
-                let Some(sample) = self.trace_samples.dequeue() else {
-                    // log_warn!("got no trace_samples");
-                    break;
-                };
-                batch[used] = sample;
-                used += 1;
-            }
-
-            if used == 0 {
-                // log_warn!("used was zero");
-                return None;
-            }
-
-            let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
-            let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
-            let timestamp_us = Instant::now().as_micros();
-            let pkt = Packet::trace_samples(
-                self.packet_seq,
-                Some(timestamp_us),
-                dropped_samples_total,
-                rx_stall_count_total,
-                &batch[..used],
-            );
-            self.packet_seq = self.packet_seq.wrapping_add(1);
-            return Some(pkt);
+    pub fn poll_master_outgoing_packet(&mut self, now_ms: u64) -> Option<Packet> {
+        if !self.telemetry_enabled {
+            return None;
         }
 
-        if self.telemetry_enabled {
-            if !self.snapshot_valid || now_ms < self.next_telemetry_due_ms {
-                return None;
-            }
-
-            let pkt = Packet::telemetry(
-                self.packet_seq,
-                0,
-                self.current_snapshot.x.count(),
-                self.current_snapshot.z.count(),
-                self.current_snapshot.s.rpm(),
-                self.flags(),
-            );
-            self.packet_seq = self.packet_seq.wrapping_add(1);
-            self.next_telemetry_due_ms = now_ms + self.telemetry_period_ms.max(1) as u64;
-            return Some(pkt);
+        if !self.snapshot_valid || now_ms < self.next_telemetry_due_ms {
+            return None;
         }
 
-        None
+        let pkt = Packet::telemetry(
+            self.packet_seq,
+            0,
+            self.current_snapshot.x.count(),
+            self.current_snapshot.z.count(),
+            self.current_snapshot.s.rpm(),
+            self.flags(),
+        );
+        self.packet_seq = self.packet_seq.wrapping_add(1);
+        self.next_telemetry_due_ms = now_ms + u64::from(self.telemetry_period_ms.max(1));
+        Some(pkt)
     }
 
-    fn has_decode_work(&self) -> bool {
+    pub fn poll_capture_outgoing_packet(&mut self) -> Option<Packet> {
+        if !self.capture_enabled {
+            return None;
+        }
+
+        let mut batch = [0_u32; TRACE_SAMPLES_PER_PACKET];
+        let mut used = 0_usize;
+
+        while used < batch.len() {
+            let Some(sample) = self.trace_samples.dequeue() else {
+                break;
+            };
+            batch[used] = sample;
+            used += 1;
+        }
+
+        if used == 0 {
+            return None;
+        }
+
+        let dropped_samples_total = TRACE_QUEUE_DROP_COUNT.load(Ordering::Relaxed);
+        let rx_stall_count_total = TRACE_RXSTALL_COUNT.load(Ordering::Relaxed);
+        let timestamp_us = Instant::now().as_micros();
+        let pkt = Packet::trace_samples(
+            self.packet_seq,
+            Some(timestamp_us),
+            dropped_samples_total,
+            rx_stall_count_total,
+            &batch[..used],
+        );
+        self.packet_seq = self.packet_seq.wrapping_add(1);
+        Some(pkt)
+    }
+
+    pub fn has_master_decode_work(&self) -> bool {
         self.telemetry_enabled && self.trace_samples.ready()
     }
 
-    fn has_outgoing_packet(&self, now_ms: u64) -> bool {
-        if self.capture_enabled {
-            return self.trace_samples.ready();
-        }
+    pub fn has_master_outgoing_packet(&self, now_ms: u64) -> bool {
         self.telemetry_enabled && self.snapshot_valid && now_ms >= self.next_telemetry_due_ms
+    }
+
+    pub fn has_capture_outgoing_packet(&self) -> bool {
+        self.capture_enabled && self.trace_samples.ready()
     }
 }
 

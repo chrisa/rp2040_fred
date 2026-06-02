@@ -5,7 +5,7 @@ Status
 - Shared bridge packet protocol in `rp2040-fred-protocol`.
 - Firmware-side bridge service with request handling, telemetry event generation, and queued controller work.
 - Host CLI for live USB monitor, capture, cycle-start, and motion tests.
-- `usb` transport is implemented with `rusb` bulk IN/OUT endpoint access.
+- `usb` transport is implemented with `rusb` against role-specific vendor bulk interfaces.
 
 Usage (usb mode)
 - `cargo run --offline -- monitor usb`
@@ -20,8 +20,10 @@ Usage (usb mode)
 Notes
 - X display uses diameter semantics (`x_counts * 2`) to match CNCMAN behavior.
 - Z display uses direct axis counts.
-- Default USB target is `VID=0x2E8A`, `PID=0x000A`, with the first bulk IN/OUT interface discovered at runtime.
-- Firmware capture mode is supported alongside bus-master mode; `monitor usb` automatically disables capture and enables DRO telemetry.
+- Default USB target is `VID=0x2E8A`, `PID=0x000A`.
+- Firmware exposes two vendor-specific USB interfaces: master protocol `0x01` for monitor/motion/controller commands, and capture protocol `0x02` for passive trace streaming.
+- Firmware still has a startup-selected passive transport; in that mode `capture usb` uses the capture interface, while motion/controller commands are not available.
+- Because the host claims the master and capture interfaces separately, `capture usb` can run in one process while `monitor usb`, `cycle-move usb`, `jog usb`, `cycle-start usb`, or `tool usb` runs in another.
 - `cycle-move usb` waits for the observed cycle-start/continue condition (`FCF0 & 0x10 == 0`) before sending one low-level `CommandBlock`.
 - `jog usb` sends the same low-level `CommandBlock` immediately for remote-jog testing.
 - X deltas are entered as diameter counts and must be even because the controller payload uses radius counts.

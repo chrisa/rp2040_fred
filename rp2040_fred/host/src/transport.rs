@@ -1,8 +1,33 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use rp2040_fred_protocol::bridge_proto::{Packet, MIN_PACKET_SIZE, PACKET_SIZE, PROTOCOL_VERSION};
+use rp2040_fred_protocol::bridge_proto::{
+    Packet, MIN_PACKET_SIZE, PACKET_SIZE, PROTOCOL_VERSION, USB_PROTOCOL_CAPTURE,
+    USB_PROTOCOL_MASTER, USB_VENDOR_CLASS, USB_VENDOR_SUBCLASS,
+};
 use rusb::{Context, DeviceHandle, Direction, Error as UsbError, TransferType, UsbContext};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbRole {
+    Master,
+    Capture,
+}
+
+impl UsbRole {
+    fn protocol(self) -> u8 {
+        match self {
+            Self::Master => USB_PROTOCOL_MASTER,
+            Self::Capture => USB_PROTOCOL_CAPTURE,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Master => "master",
+            Self::Capture => "capture",
+        }
+    }
+}
 
 pub struct UsbTransport {
     _ctx: Context,
@@ -13,7 +38,7 @@ pub struct UsbTransport {
 }
 
 impl UsbTransport {
-    pub fn open(vid: u16, pid: u16) -> io::Result<Self> {
+    pub fn open(vid: u16, pid: u16, role: UsbRole) -> io::Result<Self> {
         let ctx = Context::new().map_err(io_other)?;
         let devices = ctx.devices().map_err(io_other)?;
 
@@ -30,22 +55,21 @@ impl UsbTransport {
 
             for interface in config.interfaces() {
                 for iface_desc in interface.descriptors() {
-                    let candidate_if = iface_desc.interface_number();
-                    let mut candidate_in = None;
-                    let mut candidate_out = None;
-
-                    for ep in iface_desc.endpoint_descriptors() {
-                        if ep.transfer_type() != TransferType::Bulk {
-                            continue;
-                        }
-                        match ep.direction() {
-                            Direction::In => candidate_in = Some(ep.address()),
-                            Direction::Out => candidate_out = Some(ep.address()),
-                        }
+                    if !role_matches(
+                        role,
+                        iface_desc.class_code(),
+                        iface_desc.sub_class_code(),
+                        iface_desc.protocol_code(),
+                    ) {
+                        continue;
                     }
 
-                    if let (Some(i), Some(o)) = (candidate_in, candidate_out) {
-                        if_num = Some(candidate_if);
+                    if let Some((i, o)) = select_bulk_pair(
+                        iface_desc
+                            .endpoint_descriptors()
+                            .map(|ep| (ep.transfer_type(), ep.direction(), ep.address())),
+                    ) {
+                        if_num = Some(iface_desc.interface_number());
                         in_ep = Some(i);
                         out_ep = Some(o);
                         break;
@@ -78,7 +102,10 @@ impl UsbTransport {
 
         Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "USB device with matching VID/PID/interface not found",
+            format!(
+                "USB device with matching VID/PID/{} interface not found",
+                role.label()
+            ),
         ))
     }
 
@@ -94,8 +121,8 @@ impl UsbTransport {
                 .read_bulk(self.in_ep, &mut buf, timeout)
                 .map_err(io_other)?;
 
-            // Embassy's CMSIS-DAP v2 class appends a zero-length packet after
-            // full-size endpoint writes. Skip those framing packets.
+            // Embassy sends a zero-length packet after full-size endpoint writes.
+            // Skip those framing packets.
             if n == 0 {
                 eprintln!("read zero-length packet");
                 continue;
@@ -173,6 +200,34 @@ impl UsbTransport {
     }
 }
 
+fn role_matches(role: UsbRole, class_code: u8, sub_class_code: u8, protocol_code: u8) -> bool {
+    class_code == USB_VENDOR_CLASS
+        && sub_class_code == USB_VENDOR_SUBCLASS
+        && protocol_code == role.protocol()
+}
+
+fn select_bulk_pair(
+    endpoints: impl IntoIterator<Item = (TransferType, Direction, u8)>,
+) -> Option<(u8, u8)> {
+    let mut in_ep = None;
+    let mut out_ep = None;
+
+    for (transfer_type, direction, address) in endpoints {
+        if transfer_type != TransferType::Bulk {
+            continue;
+        }
+        match direction {
+            Direction::In => in_ep = Some(address),
+            Direction::Out => out_ep = Some(address),
+        }
+    }
+
+    match (in_ep, out_ep) {
+        (Some(i), Some(o)) => Some((i, o)),
+        _ => None,
+    }
+}
+
 fn io_other(e: UsbError) -> io::Error {
     let kind = match e {
         UsbError::Timeout => io::ErrorKind::TimedOut,
@@ -180,4 +235,39 @@ fn io_other(e: UsbError) -> io::Error {
         _ => io::ErrorKind::Other,
     };
     io::Error::new(kind, e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use rusb::{Direction, TransferType};
+
+    use super::{role_matches, select_bulk_pair, UsbRole};
+
+    #[test]
+    fn role_match_uses_vendor_class_and_protocol() {
+        assert!(role_matches(UsbRole::Master, 0xFF, 0, 0x01));
+        assert!(role_matches(UsbRole::Capture, 0xFF, 0, 0x02));
+        assert!(!role_matches(UsbRole::Master, 0xFF, 0, 0x02));
+        assert!(!role_matches(UsbRole::Capture, 0xFE, 0, 0x02));
+    }
+
+    #[test]
+    fn bulk_pair_requires_in_and_out() {
+        assert_eq!(
+            select_bulk_pair([
+                (TransferType::Interrupt, Direction::In, 0x83),
+                (TransferType::Bulk, Direction::Out, 0x01),
+                (TransferType::Bulk, Direction::In, 0x82),
+            ]),
+            Some((0x82, 0x01))
+        );
+        assert_eq!(
+            select_bulk_pair([(TransferType::Bulk, Direction::In, 0x82)]),
+            None
+        );
+        assert_eq!(
+            select_bulk_pair([(TransferType::Bulk, Direction::Out, 0x01)]),
+            None
+        );
+    }
 }

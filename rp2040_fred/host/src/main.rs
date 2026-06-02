@@ -5,7 +5,7 @@ use std::io::BufReader;
 
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
-use fredctl::transport::UsbTransport;
+use fredctl::transport::{UsbRole, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlock, CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
     COMMAND_BLOCK_FLAG_CYCLE_START_WAIT,
@@ -101,7 +101,7 @@ impl MotionStart {
 }
 
 fn motion_usb(start: MotionStart, options: MotionOptions) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Master)?;
     t.set_timeout(Duration::from_millis(1000));
 
     let request = options.command_request(start.waits_for_cycle_start())?;
@@ -113,7 +113,7 @@ fn motion_usb(start: MotionStart, options: MotionOptions) -> io::Result<()> {
 }
 
 fn cycle_start_usb() -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Master)?;
     t.set_timeout(Duration::from_millis(1000));
     let replies = t.transact(Packet::controller_action(
         1,
@@ -127,7 +127,7 @@ fn cycle_start_usb() -> io::Result<()> {
 }
 
 fn tool_usb(options: ToolOptions) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Master)?;
     t.set_timeout(Duration::from_millis(1000));
 
     let requests = options.command_requests()?;
@@ -235,9 +235,8 @@ fn wait_controller_idle(t: &mut UsbTransport, first_seq: u16) -> io::Result<()> 
 }
 
 fn capture_usb(options: CaptureUsbOptions) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let _ = t.transact(Packet::telemetry_set(1, false, 25))?;
-    let _ = t.transact(Packet::capture_set(2, true))?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Capture)?;
+    let _ = t.transact(Packet::capture_set(1, true))?;
 
     let mut printer = RawSamplePrinter::new(options.raw_print_options());
     printer.print_header();
@@ -271,9 +270,8 @@ fn capture_usb(options: CaptureUsbOptions) -> io::Result<()> {
 }
 
 fn capture_usb_to_file(path: &str) -> io::Result<()> {
-    let mut t = UsbTransport::open(0x2E8A, 0x000A)?;
-    let _ = t.transact(Packet::telemetry_set(1, false, 100))?;
-    let _ = t.transact(Packet::capture_set(2, true))?;
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Capture)?;
+    let _ = t.transact(Packet::capture_set(1, true))?;
 
     let file = File::create(path)?;
     let mut writer = CaptureWriter::new(file)?;

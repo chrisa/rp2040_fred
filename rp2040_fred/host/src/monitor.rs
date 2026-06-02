@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use rp2040_fred_protocol::bridge_proto::{MsgType, Packet};
 
-use crate::transport::UsbTransport;
+use crate::transport::{UsbRole, UsbTransport};
 
 const IDLE_READ_TIMEOUT: Duration = Duration::from_millis(1000);
 
@@ -109,7 +109,7 @@ impl FredMonitorClient {
         timeout: Duration,
         calibration: Calibration,
     ) -> io::Result<Self> {
-        let mut transport = UsbTransport::open(vid, pid)?;
+        let mut transport = UsbTransport::open(vid, pid, UsbRole::Master)?;
         transport.set_timeout(timeout);
         Ok(Self {
             transport,
@@ -119,10 +119,9 @@ impl FredMonitorClient {
     }
 
     pub fn enable_polling(&mut self, period_ms: u16) -> io::Result<()> {
-        let _ = self.transport.transact(Packet::capture_set(1, false))?;
         let _ = self
             .transport
-            .transact(Packet::telemetry_set(2, true, period_ms))?;
+            .transact(Packet::telemetry_set(1, true, period_ms))?;
         Ok(())
     }
 
