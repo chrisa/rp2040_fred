@@ -6,7 +6,11 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
-use rp2040_fred_protocol::bridge_proto::{ControllerStatus, RpmServiceMode};
+use rp2040_fred_protocol::bridge_proto::{
+    ControllerStatus, ExperimentBusOp, ExperimentBusOpKind, ExperimentRecord, ExperimentStatus,
+    RpmServiceMode, EXPERIMENT_STATUS_ACTIVE, EXPERIMENT_STATUS_DONE, EXPERIMENT_STATUS_ERROR,
+    EXPERIMENT_STATUS_RECORDS_DROPPED,
+};
 
 create_exception!(_fred_native, FredProtocolError, PyRuntimeError);
 create_exception!(_fred_native, FredUsbError, PyRuntimeError);
@@ -123,6 +127,68 @@ impl FredUsbClient {
         status_to_dict(py, status)
     }
 
+    #[pyo3(signature = (*, x_mm=0.0, z_mm=0.0, mode="rapid", feed=100, slew=61, feedback_period_ms=10, trial_id=0, script_ops=None))]
+    fn run_experiment_move_delta(
+        &mut self,
+        py: Python<'_>,
+        x_mm: f32,
+        z_mm: f32,
+        mode: &str,
+        feed: u32,
+        slew: u16,
+        feedback_period_ms: u16,
+        trial_id: u32,
+        script_ops: Option<Vec<(u8, u8, u8, u8, u8, u32)>>,
+    ) -> PyResult<bool> {
+        let feed = match mode {
+            "rapid" => None,
+            "feed" => Some(feed),
+            _ => {
+                return Err(FredProtocolError::new_err(format!(
+                    "unknown experiment move mode: {mode}"
+                )));
+            }
+        };
+        let script = parse_script_ops(script_ops.unwrap_or_default())?;
+        self.with_client(py, move |client| {
+            client.run_experiment_move_delta_mm(
+                x_mm,
+                z_mm,
+                feed,
+                slew,
+                feedback_period_ms,
+                trial_id,
+                &script,
+            )
+        })
+    }
+
+    #[pyo3(signature = (timeout_ms=0))]
+    fn next_experiment_record<'py>(
+        &mut self,
+        py: Python<'py>,
+        timeout_ms: u64,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let record = self.with_client(py, move |client| {
+            client.next_experiment_record_timeout(Duration::from_millis(timeout_ms))
+        })?;
+        record
+            .map(|record| experiment_record_to_dict(py, record))
+            .transpose()
+    }
+
+    fn experiment_status<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let status = self.with_client(py, FredMonitorClient::experiment_status)?;
+        experiment_status_to_dict(py, status)
+    }
+
+    #[pyo3(signature = (timeout_ms=None))]
+    fn wait_experiment_idle(&mut self, py: Python<'_>, timeout_ms: Option<u64>) -> PyResult<()> {
+        self.with_client(py, move |client| {
+            client.wait_experiment_idle(timeout_ms.map(Duration::from_millis))
+        })
+    }
+
     #[pyo3(signature = (timeout_ms=None))]
     fn wait_idle(&mut self, py: Python<'_>, timeout_ms: Option<u64>) -> PyResult<()> {
         self.with_client(py, move |client| {
@@ -219,6 +285,81 @@ fn status_to_dict<'py>(py: Python<'py>, status: ControllerStatus) -> PyResult<Bo
     dict.set_item("idle", status.is_idle())?;
     dict.set_item("error", status.has_error())?;
     Ok(dict)
+}
+
+fn experiment_status_to_dict<'py>(
+    py: Python<'py>,
+    status: ExperimentStatus,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("flags", status.flags)?;
+    dict.set_item("pending_records", status.pending_records)?;
+    dict.set_item("dropped_records", status.dropped_records)?;
+    dict.set_item("active_trial_id", status.active_trial_id)?;
+    dict.set_item("active", status.flags & EXPERIMENT_STATUS_ACTIVE != 0)?;
+    dict.set_item("done", status.flags & EXPERIMENT_STATUS_DONE != 0)?;
+    dict.set_item("error", status.flags & EXPERIMENT_STATUS_ERROR != 0)?;
+    dict.set_item(
+        "records_dropped",
+        status.flags & EXPERIMENT_STATUS_RECORDS_DROPPED != 0,
+    )?;
+    Ok(dict)
+}
+
+fn experiment_record_to_dict<'py>(
+    py: Python<'py>,
+    record: ExperimentRecord,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    match record {
+        ExperimentRecord::Sample(record) => {
+            dict.set_item("kind", "sample")?;
+            dict.set_item("trial_id", record.trial_id)?;
+            dict.set_item("timestamp_us", record.timestamp_us)?;
+            dict.set_item("sample_index", record.sample_index)?;
+            dict.set_item("x_counts", record.x_counts)?;
+            dict.set_item("z_counts", record.z_counts)?;
+            dict.set_item("spindle_rpm", record.rpm)?;
+            dict.set_item("flags", record.flags)?;
+        }
+        ExperimentRecord::BusOp(record) => {
+            dict.set_item("kind", "bus_op")?;
+            dict.set_item("trial_id", record.trial_id)?;
+            dict.set_item("timestamp_us", record.timestamp_us)?;
+            dict.set_item("op_index", record.op_index)?;
+            dict.set_item("op_kind", record.op_kind as u8)?;
+            dict.set_item("status", record.status)?;
+            dict.set_item("addr", record.addr)?;
+            dict.set_item("write_value", record.write_value)?;
+            dict.set_item("read_value", record.read_value)?;
+        }
+        ExperimentRecord::Event(record) => {
+            dict.set_item("kind", "event")?;
+            dict.set_item("trial_id", record.trial_id)?;
+            dict.set_item("timestamp_us", record.timestamp_us)?;
+            dict.set_item("event", record.event as u8)?;
+            dict.set_item("status", record.status)?;
+            dict.set_item("flags", record.flags)?;
+        }
+    }
+    Ok(dict)
+}
+
+fn parse_script_ops(ops: Vec<(u8, u8, u8, u8, u8, u32)>) -> PyResult<Vec<ExperimentBusOp>> {
+    let mut out = Vec::with_capacity(ops.len());
+    for (kind, addr, value, mask, match_value, arg_us) in ops {
+        out.push(ExperimentBusOp {
+            kind: ExperimentBusOpKind::from_u8(kind).ok_or_else(|| {
+                FredProtocolError::new_err(format!("unknown experiment bus op kind: {kind}"))
+            })?,
+            addr,
+            value,
+            mask,
+            match_value,
+            arg_us,
+        });
+    }
+    Ok(out)
 }
 
 fn parse_rpm_service_mode(value: &str) -> PyResult<RpmServiceMode> {

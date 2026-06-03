@@ -68,7 +68,7 @@ impl<'a> Bus<'a> {
         self.write_register_gated(0xAF, 0x00).await;
     }
 
-    async fn write_register_gated(&mut self, addr: u8, data: u8) {
+    pub async fn write_register_gated(&mut self, addr: u8, data: u8) {
         self.poll_until(0xF0, WRITE_READY_MASK).await;
         self.read_cycle(addr).await;
         self.write_cycle(addr, data).await;
@@ -112,6 +112,24 @@ impl<'a> Bus<'a> {
             }
             if Instant::now() >= deadline {
                 return false;
+            }
+        }
+    }
+
+    pub async fn read_until_mask_value_deadline(
+        &mut self,
+        addr: u8,
+        mask: u8,
+        value: u8,
+        deadline: Instant,
+    ) -> Option<u8> {
+        loop {
+            let r = self.read_cycle(addr).await;
+            if r & mask == value & mask {
+                return Some(r);
+            }
+            if Instant::now() >= deadline {
+                return None;
             }
         }
     }

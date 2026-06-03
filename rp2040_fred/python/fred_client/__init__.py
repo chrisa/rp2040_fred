@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 from ._fred_native import FredProtocolError, FredUsbError
 from ._fred_native import FredUsbClient as _NativeFredUsbClient
+
+_BUS_OP_KIND = {
+    "delay_us": 0x01,
+    "read": 0x02,
+    "write": 0x03,
+    "write_gated": 0x04,
+    "read_until": 0x05,
+    "read_status_until": 0x05,
+    "poll_feedback_once": 0x06,
+}
 
 
 class FredUsbClient:
@@ -112,6 +122,43 @@ class FredUsbClient:
     def controller_status(self) -> Dict[str, object]:
         return dict(self._inner.controller_status())
 
+    def run_experiment_move_delta(
+        self,
+        *,
+        x_mm: float = 0.0,
+        z_mm: float = 0.0,
+        mode: str = "rapid",
+        feed: int = 100,
+        slew: int = 61,
+        feedback_period_ms: int = 10,
+        trial_id: int = 0,
+        script_ops: Optional[Iterable[Dict[str, int | str]]] = None,
+    ) -> bool:
+        return bool(
+            self._inner.run_experiment_move_delta(
+                x_mm=x_mm,
+                z_mm=z_mm,
+                mode=mode,
+                feed=feed,
+                slew=slew,
+                feedback_period_ms=feedback_period_ms,
+                trial_id=trial_id,
+                script_ops=_script_ops_to_native(script_ops or ()),
+            )
+        )
+
+    def next_experiment_record(self, timeout_ms: int = 0) -> Optional[Dict[str, object]]:
+        record = self._inner.next_experiment_record(timeout_ms=timeout_ms)
+        if record is None:
+            return None
+        return dict(record)
+
+    def experiment_status(self) -> Dict[str, object]:
+        return dict(self._inner.experiment_status())
+
+    def wait_experiment_idle(self, timeout_ms: Optional[int] = None) -> None:
+        self._inner.wait_experiment_idle(timeout_ms=timeout_ms)
+
     def wait_idle(self, timeout_ms: Optional[int] = None) -> None:
         self._inner.wait_idle(timeout_ms=timeout_ms)
 
@@ -155,3 +202,23 @@ class FredUsbClient:
         raise NotImplementedError(
             "Passive capture is not exposed in the Rust-backed Python client"
         )
+
+
+def _script_ops_to_native(
+    ops: Iterable[Dict[str, int | str]],
+) -> list[tuple[int, int, int, int, int, int]]:
+    native: list[tuple[int, int, int, int, int, int]] = []
+    for op in ops:
+        name = str(op.get("op", ""))
+        try:
+            kind = _BUS_OP_KIND[name]
+        except KeyError as exc:
+            raise ValueError(f"unknown experiment bus op: {name}") from exc
+
+        addr = int(op.get("addr", 0))
+        value = int(op.get("value", 0))
+        mask = int(op.get("mask", 0))
+        match_value = int(op.get("match_value", op.get("value", 0)))
+        arg_us = int(op.get("arg_us", op.get("delay_us", op.get("timeout_us", 0))))
+        native.append((kind, addr, value, mask, match_value, arg_us))
+    return native

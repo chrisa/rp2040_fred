@@ -14,8 +14,7 @@ pub fn rapid_command_request_mm(
     slew: u16,
     calibration: AxisCalibration,
 ) -> io::Result<Option<CommandBlockRequest>> {
-    let x_counts = x_diameter_counts_from_mm(x_mm, calibration.x_counts_per_mm)?;
-    let z_counts = z_counts_from_mm(z_mm, calibration.z_counts_per_mm)?;
+    let (x_counts, z_counts) = delta_counts_from_mm(x_mm, z_mm, calibration)?;
 
     if x_counts == 0 && z_counts == 0 {
         return Ok(None);
@@ -41,6 +40,17 @@ pub fn feed_command_request_mm(
     request.block.m1 = 1;
     request.block.m8 = feed_timing(feed)?;
     Ok(Some(request))
+}
+
+pub fn delta_counts_from_mm(
+    x_mm: f32,
+    z_mm: f32,
+    calibration: AxisCalibration,
+) -> io::Result<(i32, i32)> {
+    Ok((
+        x_diameter_counts_from_mm(x_mm, calibration.x_counts_per_mm)?,
+        z_counts_from_mm(z_mm, calibration.z_counts_per_mm)?,
+    ))
 }
 
 pub fn rapid_command_block(

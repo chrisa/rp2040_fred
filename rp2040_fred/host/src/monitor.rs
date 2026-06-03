@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
 use std::io;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use rp2040_fred_protocol::bridge_proto::{
-    CommandBlockRequest, ControllerStatus, MsgType, Packet, RpmServiceMode,
+    CommandBlockRequest, ControllerStatus, ExperimentBusOp, ExperimentRecord, ExperimentRunRequest,
+    ExperimentStatus, MsgType, Packet, RpmServiceMode, EXPERIMENT_STATUS_ACTIVE,
 };
 
 use crate::motion::{self, AxisCalibration};
@@ -104,6 +106,7 @@ pub struct FredMonitorClient {
     calibration: Calibration,
     latest: MonitorSnapshot,
     latest_valid: bool,
+    experiment_pending: VecDeque<ExperimentRecord>,
     generation: u32,
     seq: u16,
 }
@@ -131,6 +134,7 @@ impl FredMonitorClient {
             calibration,
             latest: MonitorSnapshot::default(),
             latest_valid: false,
+            experiment_pending: VecDeque::new(),
             generation: 0,
             seq: 1,
         })
@@ -243,6 +247,60 @@ impl FredMonitorClient {
         Ok(true)
     }
 
+    pub fn run_experiment_move_delta_mm(
+        &mut self,
+        x_mm: f32,
+        z_mm: f32,
+        feed: Option<u32>,
+        slew: u16,
+        feedback_period_ms: u16,
+        trial_id: u32,
+        script: &[ExperimentBusOp],
+    ) -> io::Result<bool> {
+        let calibration = self.axis_calibration();
+        let (x_counts, z_counts) = motion::delta_counts_from_mm(x_mm, z_mm, calibration)?;
+        if x_counts == 0 && z_counts == 0 {
+            return Ok(false);
+        }
+
+        let Some(command) = (match feed {
+            Some(feed) => motion::feed_command_request_mm(x_mm, z_mm, feed, slew, calibration)?,
+            None => motion::rapid_command_request_mm(x_mm, z_mm, slew, calibration)?,
+        }) else {
+            return Ok(false);
+        };
+
+        let mut request = ExperimentRunRequest {
+            command,
+            trial_id,
+            x_counts,
+            z_counts,
+            feed: feed.unwrap_or(0),
+            slew,
+            feedback_period_ms,
+            script_len: u8::try_from(script.len()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "experiment script has too many operations",
+                )
+            })?,
+            ..ExperimentRunRequest::default()
+        };
+
+        if script.len() > request.script.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "experiment script has too many operations",
+            ));
+        }
+        for (dst, src) in request.script.iter_mut().zip(script.iter()) {
+            *dst = *src;
+        }
+
+        self.send_experiment_run(request)?;
+        Ok(true)
+    }
+
     pub fn set_spindle(
         &mut self,
         on: bool,
@@ -327,6 +385,9 @@ impl FredMonitorClient {
             if self.consume_packet(&pkt) {
                 continue;
             }
+            if self.buffer_experiment_record(&pkt) {
+                continue;
+            }
             if pkt.seq != seq {
                 continue;
             }
@@ -342,6 +403,108 @@ impl FredMonitorClient {
                     pkt.payload[1]
                 )));
             }
+        }
+    }
+
+    pub fn send_experiment_run(&mut self, request: ExperimentRunRequest) -> io::Result<()> {
+        let seq = self.next_seq();
+        self.transact_expect_ack(Packet::experiment_run(seq, request), MsgType::ExperimentRun)
+    }
+
+    pub fn experiment_status(&mut self) -> io::Result<ExperimentStatus> {
+        let seq = self.next_seq();
+        let req = Packet::experiment_status_req(seq);
+        self.transport.write_packet(&req)?;
+
+        let deadline = Instant::now() + TRANSACT_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "no experiment status response",
+                ));
+            }
+
+            let timeout = deadline
+                .saturating_duration_since(Instant::now())
+                .max(SHORT_READ_TIMEOUT);
+            let pkt = self.transport.read_packet_timeout(timeout)?;
+
+            if self.consume_packet(&pkt) {
+                continue;
+            }
+            if self.buffer_experiment_record(&pkt) {
+                continue;
+            }
+            if pkt.seq != seq {
+                continue;
+            }
+            if let Some(status) = pkt.decode_experiment_status_ack() {
+                return Ok(status);
+            }
+            if pkt.msg_type == MsgType::Nack
+                && pkt.payload_len >= 2
+                && pkt.payload[0] == MsgType::ExperimentStatusReq as u8
+            {
+                return Err(io::Error::other(format!(
+                    "device rejected ExperimentStatusReq with reason {:#04x}",
+                    pkt.payload[1]
+                )));
+            }
+        }
+    }
+
+    pub fn next_experiment_record_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> io::Result<Option<ExperimentRecord>> {
+        if let Some(record) = self.experiment_pending.pop_front() {
+            return Ok(Some(record));
+        }
+
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            let read_timeout = if timeout.is_zero() {
+                SHORT_READ_TIMEOUT
+            } else {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Ok(None);
+                }
+                remaining.max(SHORT_READ_TIMEOUT)
+            };
+
+            match self.transport.read_packet_timeout(read_timeout) {
+                Ok(pkt) => {
+                    if self.consume_packet(&pkt) {
+                        continue;
+                    }
+                    if let Some(record) = pkt.decode_experiment_record() {
+                        return Ok(Some(record));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::TimedOut => return Ok(None),
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    pub fn wait_experiment_idle(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        let deadline = timeout.map(|duration| Instant::now() + duration);
+
+        loop {
+            let status = self.experiment_status()?;
+            if status.flags & EXPERIMENT_STATUS_ACTIVE == 0 {
+                return Ok(());
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "experiment did not become idle before timeout",
+                ));
+            }
+            thread::sleep(WAIT_IDLE_POLL_INTERVAL);
         }
     }
 
@@ -402,6 +565,9 @@ impl FredMonitorClient {
             if self.consume_packet(&pkt) {
                 continue;
             }
+            if self.buffer_experiment_record(&pkt) {
+                continue;
+            }
             if pkt.seq != want_seq {
                 continue;
             }
@@ -437,6 +603,14 @@ impl FredMonitorClient {
         snapshot.generation = self.generation;
         self.latest = snapshot;
         self.latest_valid = true;
+        true
+    }
+
+    fn buffer_experiment_record(&mut self, pkt: &Packet) -> bool {
+        let Some(record) = pkt.decode_experiment_record() else {
+            return false;
+        };
+        self.experiment_pending.push_back(record);
         true
     }
 }

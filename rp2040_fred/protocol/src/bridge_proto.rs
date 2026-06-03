@@ -16,11 +16,22 @@ pub const TRACE_SAMPLES_PER_PACKET: usize =
 pub const TRACE_TIMESTAMP_UNKNOWN_US: u64 = u64::MAX;
 pub const COMMAND_BLOCK_PAYLOAD_SIZE: usize = 20;
 pub const COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE: usize = COMMAND_BLOCK_PAYLOAD_SIZE + 1;
+pub const MAX_EXPERIMENT_SCRIPT_OPS: usize = 21;
+pub const EXPERIMENT_BUS_OP_PAYLOAD_SIZE: usize = 12;
+pub const EXPERIMENT_RUN_FIXED_PAYLOAD_SIZE: usize = COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE + 28;
+pub const EXPERIMENT_RUN_MAX_PAYLOAD_SIZE: usize =
+    EXPERIMENT_RUN_FIXED_PAYLOAD_SIZE + MAX_EXPERIMENT_SCRIPT_OPS * EXPERIMENT_BUS_OP_PAYLOAD_SIZE;
 pub const COMMAND_BLOCK_FLAG_CYCLE_START_WAIT: u8 = 1 << 0;
 pub const TELEMETRY_FLAG_ENABLED: u8 = 1 << 0;
 pub const TELEMETRY_FLAG_CONTROLLER_BUSY: u8 = 1 << 1;
 pub const TELEMETRY_FLAG_COMMAND_ACTIVE: u8 = 1 << 2;
 pub const TELEMETRY_FLAG_CONTROLLER_ERROR: u8 = 1 << 3;
+pub const EXPERIMENT_STATUS_ACTIVE: u8 = 1 << 0;
+pub const EXPERIMENT_STATUS_DONE: u8 = 1 << 1;
+pub const EXPERIMENT_STATUS_ERROR: u8 = 1 << 2;
+pub const EXPERIMENT_STATUS_RECORDS_DROPPED: u8 = 1 << 3;
+pub const EXPERIMENT_BUS_OP_STATUS_OK: u8 = 0;
+pub const EXPERIMENT_BUS_OP_STATUS_TIMEOUT: u8 = 1;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,11 +44,14 @@ pub enum MsgType {
     CommandBlock = 0x14,
     ControllerAction = 0x15,
     ControllerStatusReq = 0x16,
+    ExperimentRun = 0x17,
+    ExperimentStatusReq = 0x18,
     Ack = 0x80,
     Nack = 0x81,
     Telemetry = 0x90,
     Health = 0x91,
     TraceSample = 0x92,
+    ExperimentRecord = 0x93,
 }
 
 impl MsgType {
@@ -51,11 +65,14 @@ impl MsgType {
             0x14 => Some(Self::CommandBlock),
             0x15 => Some(Self::ControllerAction),
             0x16 => Some(Self::ControllerStatusReq),
+            0x17 => Some(Self::ExperimentRun),
+            0x18 => Some(Self::ExperimentStatusReq),
             0x80 => Some(Self::Ack),
             0x81 => Some(Self::Nack),
             0x90 => Some(Self::Telemetry),
             0x91 => Some(Self::Health),
             0x92 => Some(Self::TraceSample),
+            0x93 => Some(Self::ExperimentRecord),
             _ => None,
         }
     }
@@ -81,6 +98,70 @@ impl ControllerAction {
 pub enum RpmServiceMode {
     Manual = 0x00,
     Remote = 0x01,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExperimentBusOpKind {
+    #[default]
+    DelayUs = 0x01,
+    Read = 0x02,
+    Write = 0x03,
+    WriteGated = 0x04,
+    ReadUntil = 0x05,
+    PollFeedbackOnce = 0x06,
+}
+
+impl ExperimentBusOpKind {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x01 => Some(Self::DelayUs),
+            0x02 => Some(Self::Read),
+            0x03 => Some(Self::Write),
+            0x04 => Some(Self::WriteGated),
+            0x05 => Some(Self::ReadUntil),
+            0x06 => Some(Self::PollFeedbackOnce),
+            _ => None,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExperimentRecordKind {
+    Sample = 0x01,
+    BusOp = 0x02,
+    Event = 0x03,
+}
+
+impl ExperimentRecordKind {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x01 => Some(Self::Sample),
+            0x02 => Some(Self::BusOp),
+            0x03 => Some(Self::Event),
+            _ => None,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExperimentEventKind {
+    CommandLoaded = 0x01,
+    CommandComplete = 0x02,
+    Error = 0x03,
+}
+
+impl ExperimentEventKind {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0x01 => Some(Self::CommandLoaded),
+            0x02 => Some(Self::CommandComplete),
+            0x03 => Some(Self::Error),
+            _ => None,
+        }
+    }
 }
 
 impl RpmServiceMode {
@@ -115,6 +196,14 @@ pub struct Packet {
 pub struct ControllerStatus {
     pub flags: u8,
     pub pending_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExperimentStatus {
+    pub flags: u8,
+    pub pending_records: u32,
+    pub dropped_records: u32,
+    pub active_trial_id: u32,
 }
 
 impl ControllerStatus {
@@ -206,6 +295,282 @@ impl CommandBlock {
 pub struct CommandBlockRequest {
     pub block: CommandBlock,
     pub flags: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExperimentBusOp {
+    pub kind: ExperimentBusOpKind,
+    pub addr: u8,
+    pub value: u8,
+    pub mask: u8,
+    pub match_value: u8,
+    pub arg_us: u32,
+}
+
+impl ExperimentBusOp {
+    pub fn delay_us(delay_us: u32) -> Self {
+        Self {
+            kind: ExperimentBusOpKind::DelayUs,
+            arg_us: delay_us,
+            ..Self::default()
+        }
+    }
+
+    pub fn read(addr: u8) -> Self {
+        Self {
+            kind: ExperimentBusOpKind::Read,
+            addr,
+            ..Self::default()
+        }
+    }
+
+    pub fn write(addr: u8, value: u8) -> Self {
+        Self {
+            kind: ExperimentBusOpKind::Write,
+            addr,
+            value,
+            ..Self::default()
+        }
+    }
+
+    pub fn write_gated(addr: u8, value: u8) -> Self {
+        Self {
+            kind: ExperimentBusOpKind::WriteGated,
+            addr,
+            value,
+            ..Self::default()
+        }
+    }
+
+    pub fn read_until(addr: u8, mask: u8, match_value: u8, timeout_us: u32) -> Self {
+        Self {
+            kind: ExperimentBusOpKind::ReadUntil,
+            addr,
+            mask,
+            match_value,
+            arg_us: timeout_us,
+            ..Self::default()
+        }
+    }
+
+    pub fn poll_feedback_once() -> Self {
+        Self {
+            kind: ExperimentBusOpKind::PollFeedbackOnce,
+            ..Self::default()
+        }
+    }
+
+    pub fn to_payload(self) -> [u8; EXPERIMENT_BUS_OP_PAYLOAD_SIZE] {
+        let mut payload = [0u8; EXPERIMENT_BUS_OP_PAYLOAD_SIZE];
+        payload[0] = self.kind as u8;
+        payload[1] = self.addr;
+        payload[2] = self.value;
+        payload[3] = self.mask;
+        payload[4] = self.match_value;
+        payload[8..12].copy_from_slice(&self.arg_us.to_le_bytes());
+        payload
+    }
+
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        if payload.len() != EXPERIMENT_BUS_OP_PAYLOAD_SIZE {
+            return None;
+        }
+
+        Some(Self {
+            kind: ExperimentBusOpKind::from_u8(payload[0])?,
+            addr: payload[1],
+            value: payload[2],
+            mask: payload[3],
+            match_value: payload[4],
+            arg_us: u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExperimentRunRequest {
+    pub command: CommandBlockRequest,
+    pub trial_id: u32,
+    pub x_counts: i32,
+    pub z_counts: i32,
+    pub feed: u32,
+    pub slew: u16,
+    pub feedback_period_ms: u16,
+    pub flags: u8,
+    pub script_len: u8,
+    pub script: [ExperimentBusOp; MAX_EXPERIMENT_SCRIPT_OPS],
+}
+
+impl Default for ExperimentRunRequest {
+    fn default() -> Self {
+        Self {
+            command: CommandBlockRequest::default(),
+            trial_id: 0,
+            x_counts: 0,
+            z_counts: 0,
+            feed: 0,
+            slew: 0,
+            feedback_period_ms: 10,
+            flags: 0,
+            script_len: 0,
+            script: [ExperimentBusOp::default(); MAX_EXPERIMENT_SCRIPT_OPS],
+        }
+    }
+}
+
+impl ExperimentRunRequest {
+    pub fn to_payload(self) -> [u8; EXPERIMENT_RUN_MAX_PAYLOAD_SIZE] {
+        let mut payload = [0u8; EXPERIMENT_RUN_MAX_PAYLOAD_SIZE];
+        payload[..COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE].copy_from_slice(&self.command.to_payload());
+        let mut offset = COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE;
+        payload[offset..offset + 4].copy_from_slice(&self.trial_id.to_le_bytes());
+        offset += 4;
+        payload[offset..offset + 4].copy_from_slice(&self.x_counts.to_le_bytes());
+        offset += 4;
+        payload[offset..offset + 4].copy_from_slice(&self.z_counts.to_le_bytes());
+        offset += 4;
+        payload[offset..offset + 4].copy_from_slice(&self.feed.to_le_bytes());
+        offset += 4;
+        payload[offset..offset + 2].copy_from_slice(&self.slew.to_le_bytes());
+        offset += 2;
+        payload[offset..offset + 2].copy_from_slice(&self.feedback_period_ms.to_le_bytes());
+        offset += 2;
+        payload[offset] = self.flags;
+        offset += 1;
+        payload[offset] = self.script_len;
+        offset += 1;
+        payload[offset..offset + 6].copy_from_slice(&[0; 6]);
+        offset += 6;
+
+        for op in self.script.iter().take(self.script_len as usize) {
+            payload[offset..offset + EXPERIMENT_BUS_OP_PAYLOAD_SIZE]
+                .copy_from_slice(&op.to_payload());
+            offset += EXPERIMENT_BUS_OP_PAYLOAD_SIZE;
+        }
+
+        payload
+    }
+
+    pub fn payload_len(self) -> usize {
+        EXPERIMENT_RUN_FIXED_PAYLOAD_SIZE
+            + self.script_len as usize * EXPERIMENT_BUS_OP_PAYLOAD_SIZE
+    }
+
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        if payload.len() < EXPERIMENT_RUN_FIXED_PAYLOAD_SIZE {
+            return None;
+        }
+
+        let command =
+            CommandBlockRequest::from_payload(&payload[..COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE])?;
+        let mut offset = COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE;
+        let trial_id = u32::from_le_bytes([
+            payload[offset],
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ]);
+        offset += 4;
+        let x_counts = i32::from_le_bytes([
+            payload[offset],
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ]);
+        offset += 4;
+        let z_counts = i32::from_le_bytes([
+            payload[offset],
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ]);
+        offset += 4;
+        let feed = u32::from_le_bytes([
+            payload[offset],
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ]);
+        offset += 4;
+        let slew = u16::from_le_bytes([payload[offset], payload[offset + 1]]);
+        offset += 2;
+        let feedback_period_ms = u16::from_le_bytes([payload[offset], payload[offset + 1]]);
+        offset += 2;
+        let flags = payload[offset];
+        offset += 1;
+        let script_len = payload[offset];
+        offset += 1;
+        offset += 6;
+
+        if script_len as usize > MAX_EXPERIMENT_SCRIPT_OPS {
+            return None;
+        }
+        let expected_len = EXPERIMENT_RUN_FIXED_PAYLOAD_SIZE
+            + script_len as usize * EXPERIMENT_BUS_OP_PAYLOAD_SIZE;
+        if payload.len() != expected_len {
+            return None;
+        }
+
+        let mut script = [ExperimentBusOp::default(); MAX_EXPERIMENT_SCRIPT_OPS];
+        for op in script.iter_mut().take(script_len as usize) {
+            *op = ExperimentBusOp::from_payload(
+                &payload[offset..offset + EXPERIMENT_BUS_OP_PAYLOAD_SIZE],
+            )?;
+            offset += EXPERIMENT_BUS_OP_PAYLOAD_SIZE;
+        }
+
+        Some(Self {
+            command,
+            trial_id,
+            x_counts,
+            z_counts,
+            feed,
+            slew,
+            feedback_period_ms,
+            flags,
+            script_len,
+            script,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExperimentSampleRecord {
+    pub trial_id: u32,
+    pub timestamp_us: u64,
+    pub sample_index: u64,
+    pub x_counts: i32,
+    pub z_counts: i32,
+    pub rpm: u16,
+    pub flags: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExperimentBusOpRecord {
+    pub trial_id: u32,
+    pub timestamp_us: u64,
+    pub op_index: u8,
+    pub op_kind: ExperimentBusOpKind,
+    pub status: u8,
+    pub addr: u8,
+    pub write_value: u8,
+    pub read_value: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExperimentEventRecord {
+    pub trial_id: u32,
+    pub timestamp_us: u64,
+    pub event: ExperimentEventKind,
+    pub status: u8,
+    pub flags: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExperimentRecord {
+    Sample(ExperimentSampleRecord),
+    BusOp(ExperimentBusOpRecord),
+    Event(ExperimentEventRecord),
 }
 
 impl CommandBlockRequest {
@@ -388,6 +753,31 @@ impl Packet {
         Self::new(MsgType::Ack, seq, &payload).expect("valid controller_status_ack")
     }
 
+    pub fn experiment_run(seq: u16, request: ExperimentRunRequest) -> Self {
+        let payload = request.to_payload();
+        Self::new(
+            MsgType::ExperimentRun,
+            seq,
+            &payload[..request.payload_len()],
+        )
+        .expect("valid experiment_run")
+    }
+
+    pub fn experiment_status_req(seq: u16) -> Self {
+        Self::new(MsgType::ExperimentStatusReq, seq, &[]).expect("valid experiment_status_req")
+    }
+
+    pub fn experiment_status_ack(seq: u16, status: ExperimentStatus) -> Self {
+        let mut payload = [0u8; 15];
+        payload[0] = MsgType::ExperimentStatusReq as u8;
+        payload[1] = 0;
+        payload[2] = status.flags;
+        payload[3..7].copy_from_slice(&status.pending_records.to_le_bytes());
+        payload[7..11].copy_from_slice(&status.dropped_records.to_le_bytes());
+        payload[11..15].copy_from_slice(&status.active_trial_id.to_le_bytes());
+        Self::new(MsgType::Ack, seq, &payload).expect("valid experiment_status_ack")
+    }
+
     pub fn ack(seq: u16, acked_type: MsgType, status: u8) -> Self {
         let payload = [acked_type as u8, status];
         Self::new(MsgType::Ack, seq, &payload).expect("valid ack")
@@ -456,6 +846,44 @@ impl Packet {
         Self::trace_samples(seq, None, 0, 0, core::slice::from_ref(&sample_bits))
     }
 
+    pub fn experiment_sample(seq: u16, record: ExperimentSampleRecord) -> Self {
+        let mut payload = [0u8; 32];
+        payload[0] = ExperimentRecordKind::Sample as u8;
+        payload[1] = record.flags;
+        payload[2..4].copy_from_slice(&record.rpm.to_le_bytes());
+        payload[4..8].copy_from_slice(&record.trial_id.to_le_bytes());
+        payload[8..16].copy_from_slice(&record.timestamp_us.to_le_bytes());
+        payload[16..24].copy_from_slice(&record.sample_index.to_le_bytes());
+        payload[24..28].copy_from_slice(&record.x_counts.to_le_bytes());
+        payload[28..32].copy_from_slice(&record.z_counts.to_le_bytes());
+        Self::new(MsgType::ExperimentRecord, seq, &payload).expect("valid experiment_sample")
+    }
+
+    pub fn experiment_bus_op(seq: u16, record: ExperimentBusOpRecord) -> Self {
+        let mut payload = [0u8; 24];
+        payload[0] = ExperimentRecordKind::BusOp as u8;
+        payload[1] = record.op_index;
+        payload[2] = record.op_kind as u8;
+        payload[3] = record.status;
+        payload[4..8].copy_from_slice(&record.trial_id.to_le_bytes());
+        payload[8..16].copy_from_slice(&record.timestamp_us.to_le_bytes());
+        payload[16] = record.addr;
+        payload[17] = record.write_value;
+        payload[18] = record.read_value;
+        Self::new(MsgType::ExperimentRecord, seq, &payload).expect("valid experiment_bus_op")
+    }
+
+    pub fn experiment_event(seq: u16, record: ExperimentEventRecord) -> Self {
+        let mut payload = [0u8; 20];
+        payload[0] = ExperimentRecordKind::Event as u8;
+        payload[1] = record.event as u8;
+        payload[2] = record.status;
+        payload[3] = record.flags;
+        payload[4..8].copy_from_slice(&record.trial_id.to_le_bytes());
+        payload[8..16].copy_from_slice(&record.timestamp_us.to_le_bytes());
+        Self::new(MsgType::ExperimentRecord, seq, &payload).expect("valid experiment_event")
+    }
+
     pub fn decode_trace_samples(&self) -> Option<TraceSamples<'_>> {
         if self.msg_type != MsgType::TraceSample
             || (self.payload_len as usize) < TRACE_METADATA_SIZE
@@ -498,6 +926,13 @@ impl Packet {
         CommandBlockRequest::from_payload(self.payload_used())
     }
 
+    pub fn decode_experiment_run(&self) -> Option<ExperimentRunRequest> {
+        if self.msg_type != MsgType::ExperimentRun {
+            return None;
+        }
+        ExperimentRunRequest::from_payload(self.payload_used())
+    }
+
     pub fn decode_controller_action(&self) -> Option<ControllerAction> {
         self.decode_controller_action_request()
             .map(|request| request.action)
@@ -528,6 +963,149 @@ impl Packet {
                 self.payload[6],
             ]),
         })
+    }
+
+    pub fn decode_experiment_status_ack(&self) -> Option<ExperimentStatus> {
+        if self.msg_type != MsgType::Ack
+            || self.payload_len < 15
+            || self.payload[0] != MsgType::ExperimentStatusReq as u8
+            || self.payload[1] != 0
+        {
+            return None;
+        }
+
+        Some(ExperimentStatus {
+            flags: self.payload[2],
+            pending_records: u32::from_le_bytes([
+                self.payload[3],
+                self.payload[4],
+                self.payload[5],
+                self.payload[6],
+            ]),
+            dropped_records: u32::from_le_bytes([
+                self.payload[7],
+                self.payload[8],
+                self.payload[9],
+                self.payload[10],
+            ]),
+            active_trial_id: u32::from_le_bytes([
+                self.payload[11],
+                self.payload[12],
+                self.payload[13],
+                self.payload[14],
+            ]),
+        })
+    }
+
+    pub fn decode_experiment_record(&self) -> Option<ExperimentRecord> {
+        if self.msg_type != MsgType::ExperimentRecord || self.payload_len < 1 {
+            return None;
+        }
+
+        match ExperimentRecordKind::from_u8(self.payload[0])? {
+            ExperimentRecordKind::Sample => {
+                if self.payload_len < 32 {
+                    return None;
+                }
+                Some(ExperimentRecord::Sample(ExperimentSampleRecord {
+                    trial_id: u32::from_le_bytes([
+                        self.payload[4],
+                        self.payload[5],
+                        self.payload[6],
+                        self.payload[7],
+                    ]),
+                    timestamp_us: u64::from_le_bytes([
+                        self.payload[8],
+                        self.payload[9],
+                        self.payload[10],
+                        self.payload[11],
+                        self.payload[12],
+                        self.payload[13],
+                        self.payload[14],
+                        self.payload[15],
+                    ]),
+                    sample_index: u64::from_le_bytes([
+                        self.payload[16],
+                        self.payload[17],
+                        self.payload[18],
+                        self.payload[19],
+                        self.payload[20],
+                        self.payload[21],
+                        self.payload[22],
+                        self.payload[23],
+                    ]),
+                    x_counts: i32::from_le_bytes([
+                        self.payload[24],
+                        self.payload[25],
+                        self.payload[26],
+                        self.payload[27],
+                    ]),
+                    z_counts: i32::from_le_bytes([
+                        self.payload[28],
+                        self.payload[29],
+                        self.payload[30],
+                        self.payload[31],
+                    ]),
+                    rpm: u16::from_le_bytes([self.payload[2], self.payload[3]]),
+                    flags: self.payload[1],
+                }))
+            }
+            ExperimentRecordKind::BusOp => {
+                if self.payload_len < 24 {
+                    return None;
+                }
+                Some(ExperimentRecord::BusOp(ExperimentBusOpRecord {
+                    trial_id: u32::from_le_bytes([
+                        self.payload[4],
+                        self.payload[5],
+                        self.payload[6],
+                        self.payload[7],
+                    ]),
+                    timestamp_us: u64::from_le_bytes([
+                        self.payload[8],
+                        self.payload[9],
+                        self.payload[10],
+                        self.payload[11],
+                        self.payload[12],
+                        self.payload[13],
+                        self.payload[14],
+                        self.payload[15],
+                    ]),
+                    op_index: self.payload[1],
+                    op_kind: ExperimentBusOpKind::from_u8(self.payload[2])?,
+                    status: self.payload[3],
+                    addr: self.payload[16],
+                    write_value: self.payload[17],
+                    read_value: self.payload[18],
+                }))
+            }
+            ExperimentRecordKind::Event => {
+                if self.payload_len < 20 {
+                    return None;
+                }
+                Some(ExperimentRecord::Event(ExperimentEventRecord {
+                    trial_id: u32::from_le_bytes([
+                        self.payload[4],
+                        self.payload[5],
+                        self.payload[6],
+                        self.payload[7],
+                    ]),
+                    timestamp_us: u64::from_le_bytes([
+                        self.payload[8],
+                        self.payload[9],
+                        self.payload[10],
+                        self.payload[11],
+                        self.payload[12],
+                        self.payload[13],
+                        self.payload[14],
+                        self.payload[15],
+                    ]),
+                    event: ExperimentEventKind::from_u8(self.payload[1])?,
+                    status: self.payload[2],
+                    flags: self.payload[3],
+                }))
+            }
+        }
     }
 }
 
@@ -562,9 +1140,12 @@ pub fn crc32_ieee(data: &[u8]) -> u32 {
 mod tests {
     use super::{
         crc32_ieee, pack_trace_sample, unpack_trace_sample, CommandBlock, CommandBlockRequest,
-        ControllerAction, ControllerStatus, DecodeError, MsgType, Packet, RpmServiceMode,
-        COMMAND_BLOCK_FLAG_CYCLE_START_WAIT, CRC_SIZE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC,
-        PROTOCOL_VERSION, TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY,
+        ControllerAction, ControllerStatus, DecodeError, ExperimentBusOp, ExperimentBusOpKind,
+        ExperimentBusOpRecord, ExperimentEventKind, ExperimentEventRecord, ExperimentRecord,
+        ExperimentRunRequest, ExperimentSampleRecord, ExperimentStatus, MsgType, Packet,
+        RpmServiceMode, COMMAND_BLOCK_FLAG_CYCLE_START_WAIT, CRC_SIZE, EXPERIMENT_STATUS_ACTIVE,
+        EXPERIMENT_STATUS_DONE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC, PROTOCOL_VERSION,
+        TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY,
         TELEMETRY_FLAG_CONTROLLER_ERROR,
     };
 
@@ -755,6 +1336,116 @@ mod tests {
         assert_eq!(got.decode_controller_status_ack(), Some(status));
         assert!(!status.is_idle());
         assert!(status.has_error());
+    }
+
+    #[test]
+    fn experiment_run_roundtrip() {
+        let mut request = ExperimentRunRequest {
+            command: CommandBlockRequest {
+                block: CommandBlock {
+                    m1: 1,
+                    m2: 0,
+                    m3: raw_word(-10),
+                    m4: raw_word(250),
+                    m5: 0,
+                    m6: 0,
+                    m7: 0,
+                    m8: 950,
+                    m9: 61,
+                    m10: 0,
+                },
+                flags: 0,
+            },
+            trial_id: 42,
+            x_counts: -20,
+            z_counts: 250,
+            feed: 100,
+            slew: 61,
+            feedback_period_ms: 10,
+            flags: 0xA0,
+            script_len: 3,
+            ..ExperimentRunRequest::default()
+        };
+        request.script[0] = ExperimentBusOp::delay_us(50_000);
+        request.script[1] = ExperimentBusOp::write_gated(0xAF, 0);
+        request.script[2] = ExperimentBusOp::read_until(0xF0, 0x80, 0, 10_000);
+
+        let pkt = Packet::experiment_run(0x49, request);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode experiment");
+
+        assert_eq!(got.msg_type, MsgType::ExperimentRun);
+        assert_eq!(got.seq, 0x49);
+        assert_eq!(got.decode_experiment_run(), Some(request));
+    }
+
+    #[test]
+    fn experiment_status_ack_roundtrip() {
+        let status = ExperimentStatus {
+            flags: EXPERIMENT_STATUS_ACTIVE | EXPERIMENT_STATUS_DONE,
+            pending_records: 12,
+            dropped_records: 3,
+            active_trial_id: 99,
+        };
+        let pkt = Packet::experiment_status_ack(0x4A, status);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode experiment status");
+
+        assert_eq!(got.msg_type, MsgType::Ack);
+        assert_eq!(got.decode_experiment_status_ack(), Some(status));
+    }
+
+    #[test]
+    fn experiment_records_roundtrip() {
+        let sample = ExperimentSampleRecord {
+            trial_id: 7,
+            timestamp_us: 123_456,
+            sample_index: 9,
+            x_counts: -12,
+            z_counts: 345,
+            rpm: 780,
+            flags: 0x5A,
+        };
+        let pkt = Packet::experiment_sample(0x4B, sample);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode sample");
+        assert_eq!(
+            got.decode_experiment_record(),
+            Some(ExperimentRecord::Sample(sample))
+        );
+
+        let bus_op = ExperimentBusOpRecord {
+            trial_id: 7,
+            timestamp_us: 123_789,
+            op_index: 2,
+            op_kind: ExperimentBusOpKind::WriteGated,
+            status: 1,
+            addr: 0xAF,
+            write_value: 0,
+            read_value: 0x3C,
+        };
+        let pkt = Packet::experiment_bus_op(0x4C, bus_op);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode bus op");
+        assert_eq!(
+            got.decode_experiment_record(),
+            Some(ExperimentRecord::BusOp(bus_op))
+        );
+
+        let event = ExperimentEventRecord {
+            trial_id: 7,
+            timestamp_us: 124_000,
+            event: ExperimentEventKind::CommandComplete,
+            status: 0,
+            flags: 0x03,
+        };
+        let pkt = Packet::experiment_event(0x4D, event);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode event");
+        assert_eq!(
+            got.decode_experiment_record(),
+            Some(ExperimentRecord::Event(event))
+        );
     }
 
     #[test]
