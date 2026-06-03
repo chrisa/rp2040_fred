@@ -133,6 +133,7 @@ class FredUsbClient:
         feedback_period_ms: int = 10,
         trial_id: int = 0,
         script_ops: Optional[Iterable[Dict[str, int | str]]] = None,
+        feedback_timing: bool = False,
     ) -> bool:
         return bool(
             self._inner.run_experiment_move_delta(
@@ -144,7 +145,23 @@ class FredUsbClient:
                 feedback_period_ms=feedback_period_ms,
                 trial_id=trial_id,
                 script_ops=_script_ops_to_native(script_ops or ()),
+                feedback_timing=feedback_timing,
             )
+        )
+
+    def run_feedback_timing_experiment(
+        self,
+        *,
+        feedback_period_ms: int = 10,
+        trial_id: int = 0,
+        poll_count: int = 30,
+        sequence: str = "full",
+    ) -> None:
+        self._inner.run_feedback_timing_experiment(
+            feedback_period_ms=feedback_period_ms,
+            trial_id=trial_id,
+            poll_count=poll_count,
+            sequence=sequence,
         )
 
     def next_experiment_record(self, timeout_ms: int = 0) -> Optional[Dict[str, object]]:

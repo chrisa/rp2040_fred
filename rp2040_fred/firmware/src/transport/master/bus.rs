@@ -10,6 +10,22 @@ pub struct Bus<'a> {
     pub pio: ThisMasterPio<'a>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WaitTiming {
+    pub elapsed_us: u32,
+    pub reads: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandCycleTiming {
+    pub value: u8,
+    pub total_us: u32,
+    pub wait_before_us: u32,
+    pub wait_after_us: u32,
+    pub reads_before: u32,
+    pub reads_after: u32,
+}
+
 impl<'a> Bus<'a> {
     pub async fn command_cycle(&mut self, cmd: u8) -> u8 {
         // 1. Poll `F0` until bit 0 clears.
@@ -20,6 +36,22 @@ impl<'a> Bus<'a> {
         self.write_cycle(0x80, cmd).await;
         self.poll_until(0xF0, WRITE_READY_MASK).await;
         return self.read_cycle(0xF1).await;
+    }
+
+    pub async fn command_cycle_timed(&mut self, cmd: u8) -> CommandCycleTiming {
+        let start_us = Instant::now().as_micros();
+        let wait_before = self.poll_until_timed(0xF0, WRITE_READY_MASK).await;
+        self.write_cycle(0x80, cmd).await;
+        let wait_after = self.poll_until_timed(0xF0, WRITE_READY_MASK).await;
+        let value = self.read_cycle(0xF1).await;
+        CommandCycleTiming {
+            value,
+            total_us: elapsed_us_since(start_us),
+            wait_before_us: wait_before.elapsed_us,
+            wait_after_us: wait_after.elapsed_us,
+            reads_before: wait_before.reads,
+            reads_after: wait_after.reads,
+        }
     }
 
     pub async fn command_cycle_deadline(&mut self, cmd: u8, deadline: Instant) -> Option<u8> {
@@ -104,6 +136,21 @@ impl<'a> Bus<'a> {
         }
     }
 
+    pub async fn poll_until_timed(&mut self, addr: u8, mask: u8) -> WaitTiming {
+        let start_us = Instant::now().as_micros();
+        let mut reads = 0_u32;
+        loop {
+            let r = self.read_cycle(addr).await;
+            reads = reads.saturating_add(1);
+            if r & mask == 0 {
+                return WaitTiming {
+                    elapsed_us: elapsed_us_since(start_us),
+                    reads,
+                };
+            }
+        }
+    }
+
     async fn poll_until_deadline(&mut self, addr: u8, mask: u8, deadline: Instant) -> bool {
         loop {
             let r = self.read_cycle(addr).await;
@@ -147,4 +194,9 @@ impl<'a> Bus<'a> {
         self.pio.control.tx().wait_push(addr_payload).await;
         return self.pio.read.rx().wait_pull().await as u8;
     }
+}
+
+fn elapsed_us_since(start_us: u64) -> u32 {
+    let elapsed = Instant::now().as_micros().saturating_sub(start_us);
+    elapsed.min(u64::from(u32::MAX)) as u32
 }

@@ -20,6 +20,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--z-counts-per-mm", type=float, default=100.0)
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--feedback-period-ms", type=int, default=10)
+    parser.add_argument("--allow-fast-feedback", action="store_true")
+    parser.add_argument("--skip-feedback-timing-probe", action="store_true")
+    parser.add_argument("--feedback-timing-sequences", default="full,xz")
+    parser.add_argument("--feedback-timing-poll-count", type=int, default=30)
+    parser.add_argument("--feedback-timing-trials", type=int, default=1)
+    parser.add_argument(
+        "--motion-feedback-timing",
+        action="store_true",
+        help="include per-command timing rows in latency experiments",
+    )
+    parser.add_argument(
+        "--intervention-feedback-timing",
+        action="store_true",
+        help="include per-command timing rows in in-flight intervention experiments",
+    )
     parser.add_argument("--slew", type=int, default=61)
     parser.add_argument("--safe-mm", type=float, default=50.0)
     parser.add_argument("--latency-length-mm", default="1,5,10")
@@ -73,6 +88,29 @@ def main() -> int:
     py = sys.executable
     base = common_device_args(args)
     yes = ["--yes"] if args.yes else []
+    allow_fast = ["--allow-fast-feedback"] if args.allow_fast_feedback else []
+
+    if not args.skip_feedback_timing_probe:
+        for sequence in [part for part in args.feedback_timing_sequences.split(",") if part]:
+            timing_cmd = [
+                py,
+                str(script_dir / "feedback_timing_probe.py"),
+                *base,
+                "--feedback-period-ms",
+                str(args.feedback_period_ms),
+                *allow_fast,
+                "--sequence",
+                sequence,
+                "--poll-count",
+                str(args.feedback_timing_poll_count),
+                "--trials",
+                str(args.feedback_timing_trials),
+                "--timeout-s",
+                str(args.latency_timeout_s),
+                "--out",
+                str(out_dir / f"feedback_timing_{sequence}_{args.feedback_period_ms}ms.csv"),
+            ]
+            run_or_print(timing_cmd, run=args.yes)
 
     latency_cmd = [
         py,
@@ -93,13 +131,16 @@ def main() -> int:
         str(args.latency_trials),
         "--feedback-period-ms",
         str(args.feedback_period_ms),
+        *allow_fast,
         "--safe-mm",
         str(args.safe_mm),
         "--timeout-s",
         str(args.latency_timeout_s),
         "--out",
-        str(out_dir / "latency_10ms.csv"),
+        str(out_dir / f"latency_{args.feedback_period_ms}ms.csv"),
     ]
+    if args.motion_feedback_timing:
+        latency_cmd.append("--feedback-timing")
     run_or_print(latency_cmd, run=args.yes)
 
     interventions = [name for name in args.interventions.split(",") if name]
@@ -130,6 +171,7 @@ def main() -> int:
             str(args.slew),
             "--feedback-period-ms",
             str(args.feedback_period_ms),
+            *allow_fast,
             "--delay-us",
             str(args.intervention_delay_us),
             "--safe-mm",
@@ -141,6 +183,8 @@ def main() -> int:
             "--out",
             str(out),
         ]
+        if args.intervention_feedback_timing:
+            cmd.append("--feedback-timing")
         run_or_print(cmd, run=args.yes)
 
     return 0

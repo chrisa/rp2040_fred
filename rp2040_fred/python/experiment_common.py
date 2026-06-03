@@ -37,6 +37,15 @@ CSV_FIELDS = [
     "read_value",
     "status",
     "event",
+    "poll_index",
+    "cmd_index",
+    "cmd",
+    "value",
+    "total_us",
+    "wait_before_us",
+    "wait_after_us",
+    "reads_before",
+    "reads_after",
     "pending_records",
     "dropped_records",
     "active",
@@ -133,6 +142,16 @@ def write_record(
     elif kind == "event":
         event = int(record.get("event", 0))
         row["event"] = EVENT_NAMES.get(event, event)
+    elif kind == "feedback_timing":
+        row["poll_index"] = record.get("poll_index", "")
+        row["cmd_index"] = record.get("cmd_index", "")
+        row["cmd"] = record.get("cmd", "")
+        row["value"] = record.get("value", "")
+        row["total_us"] = record.get("total_us", "")
+        row["wait_before_us"] = record.get("wait_before_us", "")
+        row["wait_after_us"] = record.get("wait_after_us", "")
+        row["reads_before"] = record.get("reads_before", "")
+        row["reads_after"] = record.get("reads_after", "")
 
     writer.writerow(row)
 

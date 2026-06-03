@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlockRequest, ControllerStatus, ExperimentBusOp, ExperimentRecord, ExperimentRunRequest,
     ExperimentStatus, MsgType, Packet, RpmServiceMode, EXPERIMENT_STATUS_ACTIVE,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY, EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY, EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY,
 };
 
 use crate::motion::{self, AxisCalibration};
@@ -29,6 +32,26 @@ pub struct DroSnapshot {
 pub struct Calibration {
     pub x_counts_per_mm: f32,
     pub z_counts_per_mm: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FeedbackTimingSequence {
+    #[default]
+    Full,
+    Xz,
+    X,
+    Z,
+}
+
+impl FeedbackTimingSequence {
+    fn flag(self) -> u8 {
+        match self {
+            Self::Full => 0,
+            Self::Xz => EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY,
+            Self::X => EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY,
+            Self::Z => EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY,
+        }
+    }
 }
 
 impl Default for Calibration {
@@ -256,6 +279,7 @@ impl FredMonitorClient {
         feedback_period_ms: u16,
         trial_id: u32,
         script: &[ExperimentBusOp],
+        feedback_timing: bool,
     ) -> io::Result<bool> {
         let calibration = self.axis_calibration();
         let (x_counts, z_counts) = motion::delta_counts_from_mm(x_mm, z_mm, calibration)?;
@@ -278,6 +302,11 @@ impl FredMonitorClient {
             feed: feed.unwrap_or(0),
             slew,
             feedback_period_ms,
+            flags: if feedback_timing {
+                EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING
+            } else {
+                0
+            },
             script_len: u8::try_from(script.len()).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -299,6 +328,29 @@ impl FredMonitorClient {
 
         self.send_experiment_run(request)?;
         Ok(true)
+    }
+
+    pub fn run_feedback_timing_experiment(
+        &mut self,
+        feedback_period_ms: u16,
+        trial_id: u32,
+        poll_count: u32,
+        sequence: FeedbackTimingSequence,
+    ) -> io::Result<()> {
+        let flags = EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY
+            | EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING
+            | sequence.flag();
+        let request = ExperimentRunRequest {
+            trial_id,
+            x_counts: i32::try_from(poll_count.max(1)).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "poll count is too large")
+            })?,
+            feedback_period_ms,
+            flags,
+            ..ExperimentRunRequest::default()
+        };
+
+        self.send_experiment_run(request)
     }
 
     pub fn set_spindle(

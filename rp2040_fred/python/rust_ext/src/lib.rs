@@ -1,7 +1,7 @@
 use std::io;
 use std::time::Duration;
 
-use fredctl::monitor::{Calibration, FredMonitorClient, MonitorSnapshot};
+use fredctl::monitor::{Calibration, FeedbackTimingSequence, FredMonitorClient, MonitorSnapshot};
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -127,7 +127,7 @@ impl FredUsbClient {
         status_to_dict(py, status)
     }
 
-    #[pyo3(signature = (*, x_mm=0.0, z_mm=0.0, mode="rapid", feed=100, slew=61, feedback_period_ms=10, trial_id=0, script_ops=None))]
+    #[pyo3(signature = (*, x_mm=0.0, z_mm=0.0, mode="rapid", feed=100, slew=61, feedback_period_ms=10, trial_id=0, script_ops=None, feedback_timing=false))]
     fn run_experiment_move_delta(
         &mut self,
         py: Python<'_>,
@@ -139,6 +139,7 @@ impl FredUsbClient {
         feedback_period_ms: u16,
         trial_id: u32,
         script_ops: Option<Vec<(u8, u8, u8, u8, u8, u32)>>,
+        feedback_timing: bool,
     ) -> PyResult<bool> {
         let feed = match mode {
             "rapid" => None,
@@ -159,6 +160,27 @@ impl FredUsbClient {
                 feedback_period_ms,
                 trial_id,
                 &script,
+                feedback_timing,
+            )
+        })
+    }
+
+    #[pyo3(signature = (*, feedback_period_ms=10, trial_id=0, poll_count=30, sequence="full"))]
+    fn run_feedback_timing_experiment(
+        &mut self,
+        py: Python<'_>,
+        feedback_period_ms: u16,
+        trial_id: u32,
+        poll_count: u32,
+        sequence: &str,
+    ) -> PyResult<()> {
+        let sequence = parse_feedback_timing_sequence(sequence)?;
+        self.with_client(py, move |client| {
+            client.run_feedback_timing_experiment(
+                feedback_period_ms,
+                trial_id,
+                poll_count,
+                sequence,
             )
         })
     }
@@ -341,6 +363,21 @@ fn experiment_record_to_dict<'py>(
             dict.set_item("status", record.status)?;
             dict.set_item("flags", record.flags)?;
         }
+        ExperimentRecord::FeedbackTiming(record) => {
+            dict.set_item("kind", "feedback_timing")?;
+            dict.set_item("trial_id", record.trial_id)?;
+            dict.set_item("timestamp_us", record.timestamp_us)?;
+            dict.set_item("poll_index", record.poll_index)?;
+            dict.set_item("cmd_index", record.cmd_index)?;
+            dict.set_item("cmd", record.cmd)?;
+            dict.set_item("value", record.value)?;
+            dict.set_item("flags", record.flags)?;
+            dict.set_item("total_us", record.total_us)?;
+            dict.set_item("wait_before_us", record.wait_before_us)?;
+            dict.set_item("wait_after_us", record.wait_after_us)?;
+            dict.set_item("reads_before", record.reads_before)?;
+            dict.set_item("reads_after", record.reads_after)?;
+        }
     }
     Ok(dict)
 }
@@ -368,6 +405,18 @@ fn parse_rpm_service_mode(value: &str) -> PyResult<RpmServiceMode> {
         "remote" | "fcad" | "ad" => Ok(RpmServiceMode::Remote),
         _ => Err(FredProtocolError::new_err(format!(
             "unknown RPM service mode: {value}"
+        ))),
+    }
+}
+
+fn parse_feedback_timing_sequence(value: &str) -> PyResult<FeedbackTimingSequence> {
+    match value {
+        "full" | "xzrpm" => Ok(FeedbackTimingSequence::Full),
+        "xz" | "axes" => Ok(FeedbackTimingSequence::Xz),
+        "x" => Ok(FeedbackTimingSequence::X),
+        "z" => Ok(FeedbackTimingSequence::Z),
+        _ => Err(FredProtocolError::new_err(format!(
+            "unknown feedback timing sequence: {value}"
         ))),
     }
 }

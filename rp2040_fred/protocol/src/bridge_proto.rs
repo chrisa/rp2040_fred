@@ -32,6 +32,11 @@ pub const EXPERIMENT_STATUS_ERROR: u8 = 1 << 2;
 pub const EXPERIMENT_STATUS_RECORDS_DROPPED: u8 = 1 << 3;
 pub const EXPERIMENT_BUS_OP_STATUS_OK: u8 = 0;
 pub const EXPERIMENT_BUS_OP_STATUS_TIMEOUT: u8 = 1;
+pub const EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING: u8 = 1 << 0;
+pub const EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY: u8 = 1 << 1;
+pub const EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY: u8 = 1 << 2;
+pub const EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY: u8 = 1 << 3;
+pub const EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY: u8 = 1 << 4;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +137,7 @@ pub enum ExperimentRecordKind {
     Sample = 0x01,
     BusOp = 0x02,
     Event = 0x03,
+    FeedbackTiming = 0x04,
 }
 
 impl ExperimentRecordKind {
@@ -140,6 +146,7 @@ impl ExperimentRecordKind {
             0x01 => Some(Self::Sample),
             0x02 => Some(Self::BusOp),
             0x03 => Some(Self::Event),
+            0x04 => Some(Self::FeedbackTiming),
             _ => None,
         }
     }
@@ -419,6 +426,14 @@ impl Default for ExperimentRunRequest {
 }
 
 impl ExperimentRunRequest {
+    pub fn feedback_timing_enabled(self) -> bool {
+        self.flags & EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING != 0
+    }
+
+    pub fn feedback_only(self) -> bool {
+        self.flags & EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY != 0
+    }
+
     pub fn to_payload(self) -> [u8; EXPERIMENT_RUN_MAX_PAYLOAD_SIZE] {
         let mut payload = [0u8; EXPERIMENT_RUN_MAX_PAYLOAD_SIZE];
         payload[..COMMAND_BLOCK_REQUEST_PAYLOAD_SIZE].copy_from_slice(&self.command.to_payload());
@@ -567,10 +582,27 @@ pub struct ExperimentEventRecord {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExperimentFeedbackTimingRecord {
+    pub trial_id: u32,
+    pub timestamp_us: u64,
+    pub poll_index: u32,
+    pub cmd_index: u8,
+    pub cmd: u8,
+    pub value: u8,
+    pub flags: u8,
+    pub total_us: u32,
+    pub wait_before_us: u32,
+    pub wait_after_us: u32,
+    pub reads_before: u32,
+    pub reads_after: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExperimentRecord {
     Sample(ExperimentSampleRecord),
     BusOp(ExperimentBusOpRecord),
     Event(ExperimentEventRecord),
+    FeedbackTiming(ExperimentFeedbackTimingRecord),
 }
 
 impl CommandBlockRequest {
@@ -884,6 +916,25 @@ impl Packet {
         Self::new(MsgType::ExperimentRecord, seq, &payload).expect("valid experiment_event")
     }
 
+    pub fn experiment_feedback_timing(seq: u16, record: ExperimentFeedbackTimingRecord) -> Self {
+        let mut payload = [0u8; 44];
+        payload[0] = ExperimentRecordKind::FeedbackTiming as u8;
+        payload[1] = record.flags;
+        payload[2] = record.cmd_index;
+        payload[3] = record.cmd;
+        payload[4] = record.value;
+        payload[8..12].copy_from_slice(&record.trial_id.to_le_bytes());
+        payload[12..20].copy_from_slice(&record.timestamp_us.to_le_bytes());
+        payload[20..24].copy_from_slice(&record.poll_index.to_le_bytes());
+        payload[24..28].copy_from_slice(&record.total_us.to_le_bytes());
+        payload[28..32].copy_from_slice(&record.wait_before_us.to_le_bytes());
+        payload[32..36].copy_from_slice(&record.wait_after_us.to_le_bytes());
+        payload[36..40].copy_from_slice(&record.reads_before.to_le_bytes());
+        payload[40..44].copy_from_slice(&record.reads_after.to_le_bytes());
+        Self::new(MsgType::ExperimentRecord, seq, &payload)
+            .expect("valid experiment_feedback_timing")
+    }
+
     pub fn decode_trace_samples(&self) -> Option<TraceSamples<'_>> {
         if self.msg_type != MsgType::TraceSample
             || (self.payload_len as usize) < TRACE_METADATA_SIZE
@@ -1105,6 +1156,71 @@ impl Packet {
                     flags: self.payload[3],
                 }))
             }
+            ExperimentRecordKind::FeedbackTiming => {
+                if self.payload_len < 44 {
+                    return None;
+                }
+                Some(ExperimentRecord::FeedbackTiming(
+                    ExperimentFeedbackTimingRecord {
+                        trial_id: u32::from_le_bytes([
+                            self.payload[8],
+                            self.payload[9],
+                            self.payload[10],
+                            self.payload[11],
+                        ]),
+                        timestamp_us: u64::from_le_bytes([
+                            self.payload[12],
+                            self.payload[13],
+                            self.payload[14],
+                            self.payload[15],
+                            self.payload[16],
+                            self.payload[17],
+                            self.payload[18],
+                            self.payload[19],
+                        ]),
+                        poll_index: u32::from_le_bytes([
+                            self.payload[20],
+                            self.payload[21],
+                            self.payload[22],
+                            self.payload[23],
+                        ]),
+                        cmd_index: self.payload[2],
+                        cmd: self.payload[3],
+                        value: self.payload[4],
+                        flags: self.payload[1],
+                        total_us: u32::from_le_bytes([
+                            self.payload[24],
+                            self.payload[25],
+                            self.payload[26],
+                            self.payload[27],
+                        ]),
+                        wait_before_us: u32::from_le_bytes([
+                            self.payload[28],
+                            self.payload[29],
+                            self.payload[30],
+                            self.payload[31],
+                        ]),
+                        wait_after_us: u32::from_le_bytes([
+                            self.payload[32],
+                            self.payload[33],
+                            self.payload[34],
+                            self.payload[35],
+                        ]),
+                        reads_before: u32::from_le_bytes([
+                            self.payload[36],
+                            self.payload[37],
+                            self.payload[38],
+                            self.payload[39],
+                        ]),
+                        reads_after: u32::from_le_bytes([
+                            self.payload[40],
+                            self.payload[41],
+                            self.payload[42],
+                            self.payload[43],
+                        ]),
+                    },
+                ))
+            }
         }
     }
 }
@@ -1141,10 +1257,12 @@ mod tests {
     use super::{
         crc32_ieee, pack_trace_sample, unpack_trace_sample, CommandBlock, CommandBlockRequest,
         ControllerAction, ControllerStatus, DecodeError, ExperimentBusOp, ExperimentBusOpKind,
-        ExperimentBusOpRecord, ExperimentEventKind, ExperimentEventRecord, ExperimentRecord,
-        ExperimentRunRequest, ExperimentSampleRecord, ExperimentStatus, MsgType, Packet,
-        RpmServiceMode, COMMAND_BLOCK_FLAG_CYCLE_START_WAIT, CRC_SIZE, EXPERIMENT_STATUS_ACTIVE,
-        EXPERIMENT_STATUS_DONE, HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC, PROTOCOL_VERSION,
+        ExperimentBusOpRecord, ExperimentEventKind, ExperimentEventRecord,
+        ExperimentFeedbackTimingRecord, ExperimentRecord, ExperimentRunRequest,
+        ExperimentSampleRecord, ExperimentStatus, MsgType, Packet, RpmServiceMode,
+        COMMAND_BLOCK_FLAG_CYCLE_START_WAIT, CRC_SIZE, EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY,
+        EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING, EXPERIMENT_STATUS_ACTIVE, EXPERIMENT_STATUS_DONE,
+        HEADER_SIZE, MIN_PACKET_SIZE, PACKET_MAGIC, PROTOCOL_VERSION,
         TELEMETRY_FLAG_COMMAND_ACTIVE, TELEMETRY_FLAG_CONTROLLER_BUSY,
         TELEMETRY_FLAG_CONTROLLER_ERROR,
     };
@@ -1369,6 +1487,7 @@ mod tests {
         request.script[0] = ExperimentBusOp::delay_us(50_000);
         request.script[1] = ExperimentBusOp::write_gated(0xAF, 0);
         request.script[2] = ExperimentBusOp::read_until(0xF0, 0x80, 0, 10_000);
+        request.flags = EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING | EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY;
 
         let pkt = Packet::experiment_run(0x49, request);
         let raw = pkt.encode();
@@ -1377,6 +1496,8 @@ mod tests {
         assert_eq!(got.msg_type, MsgType::ExperimentRun);
         assert_eq!(got.seq, 0x49);
         assert_eq!(got.decode_experiment_run(), Some(request));
+        assert!(request.feedback_timing_enabled());
+        assert!(request.feedback_only());
     }
 
     #[test]
@@ -1445,6 +1566,28 @@ mod tests {
         assert_eq!(
             got.decode_experiment_record(),
             Some(ExperimentRecord::Event(event))
+        );
+
+        let timing = ExperimentFeedbackTimingRecord {
+            trial_id: 7,
+            timestamp_us: 124_500,
+            poll_index: 3,
+            cmd_index: 9,
+            cmd: 0x0C,
+            value: 0x12,
+            flags: 0x04,
+            total_us: 1234,
+            wait_before_us: 456,
+            wait_after_us: 789,
+            reads_before: 11,
+            reads_after: 22,
+        };
+        let pkt = Packet::experiment_feedback_timing(0x4E, timing);
+        let raw = pkt.encode();
+        let got = Packet::decode(&raw[..pkt.encoded_len()]).expect("decode timing");
+        assert_eq!(
+            got.decode_experiment_record(),
+            Some(ExperimentRecord::FeedbackTiming(timing))
         );
     }
 

@@ -138,6 +138,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feed", type=int, default=100)
     parser.add_argument("--slew", type=int, default=61)
     parser.add_argument("--feedback-period-ms", type=int, default=10)
+    parser.add_argument(
+        "--feedback-timing",
+        action="store_true",
+        help="emit per-feedback-command firmware timing records",
+    )
     parser.add_argument("--allow-fast-feedback", action="store_true")
     parser.add_argument("--delay-us", type=int, default=100_000)
     parser.add_argument("--safe-mm", type=float, default=50.0)
@@ -183,6 +188,7 @@ def main() -> int:
         f"  delay_us={args.delay_us} feedback_period_ms={args.feedback_period_ms} script_ops={len(script)}",
         file=sys.stderr,
     )
+    print(f"  feedback_timing={args.feedback_timing}", file=sys.stderr)
 
     if not args.yes:
         print("Refusing to move without --yes.", file=sys.stderr)
@@ -225,6 +231,7 @@ def main() -> int:
                     feedback_period_ms=args.feedback_period_ms,
                     trial_id=1,
                     script_ops=script,
+                    feedback_timing=args.feedback_timing,
                 )
                 write_event(writer, meta, "command_after_sent" if sent else "skipped")
                 if sent:

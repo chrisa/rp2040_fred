@@ -19,11 +19,13 @@ use crate::transport::pio::passive::PassivePio;
 
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlockRequest, ControllerAction, ControllerStatus, ExperimentBusOp, ExperimentBusOpKind,
-    ExperimentBusOpRecord, ExperimentEventKind, ExperimentEventRecord, ExperimentRecord,
-    ExperimentRunRequest, ExperimentSampleRecord, ExperimentStatus, MsgType, Packet,
-    RpmServiceMode, EXPERIMENT_BUS_OP_STATUS_OK, EXPERIMENT_BUS_OP_STATUS_TIMEOUT,
-    EXPERIMENT_STATUS_ACTIVE, EXPERIMENT_STATUS_DONE, EXPERIMENT_STATUS_ERROR,
-    EXPERIMENT_STATUS_RECORDS_DROPPED, TELEMETRY_FLAG_COMMAND_ACTIVE,
+    ExperimentBusOpRecord, ExperimentEventKind, ExperimentEventRecord,
+    ExperimentFeedbackTimingRecord, ExperimentRecord, ExperimentRunRequest, ExperimentSampleRecord,
+    ExperimentStatus, MsgType, Packet, RpmServiceMode, EXPERIMENT_BUS_OP_STATUS_OK,
+    EXPERIMENT_BUS_OP_STATUS_TIMEOUT, EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY, EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY, EXPERIMENT_STATUS_ACTIVE, EXPERIMENT_STATUS_DONE,
+    EXPERIMENT_STATUS_ERROR, EXPERIMENT_STATUS_RECORDS_DROPPED, TELEMETRY_FLAG_COMMAND_ACTIVE,
     TELEMETRY_FLAG_CONTROLLER_BUSY, TELEMETRY_FLAG_CONTROLLER_ERROR, TELEMETRY_FLAG_ENABLED,
     TRACE_SAMPLES_PER_PACKET,
 };
@@ -53,6 +55,8 @@ static POLLING_SUSPEND_PENDING_COUNT: AtomicU32 = AtomicU32::new(0);
 static CONTROLLER_WORK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CONTROLLER_BUSY: AtomicBool = AtomicBool::new(false);
 static CONTROLLER_ERROR: AtomicBool = AtomicBool::new(false);
+static POSITION_POLLING_ENABLED: AtomicBool = AtomicBool::new(false);
+static POSITION_POLLING_PERIOD_MS: AtomicU32 = AtomicU32::new(10);
 static POSITION_POLLING_SUSPENDED: AtomicBool = AtomicBool::new(false);
 static RPM_SERVICE_MODE: AtomicU8 = AtomicU8::new(RpmServiceMode::Manual as u8);
 static EXPERIMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -127,6 +131,8 @@ impl BusMasterTransport {
         CONTROLLER_WORK_ACTIVE.store(false, Ordering::Relaxed);
         CONTROLLER_BUSY.store(false, Ordering::Relaxed);
         CONTROLLER_ERROR.store(false, Ordering::Relaxed);
+        POSITION_POLLING_ENABLED.store(false, Ordering::Relaxed);
+        POSITION_POLLING_PERIOD_MS.store(10, Ordering::Relaxed);
         POSITION_POLLING_SUSPENDED.store(false, Ordering::Relaxed);
         EXPERIMENT_ACTIVE.store(false, Ordering::Relaxed);
         EXPERIMENT_DONE.store(false, Ordering::Relaxed);
@@ -216,6 +222,11 @@ impl BusMasterTransport {
                     self.telemetry_enabled = req.payload[0] != 0;
                     self.reset_master_stream_state();
                     self.telemetry_period_ms = u16::from_le_bytes([req.payload[1], req.payload[2]]);
+                    POSITION_POLLING_ENABLED.store(self.telemetry_enabled, Ordering::Relaxed);
+                    POSITION_POLLING_PERIOD_MS.store(
+                        u32::from(self.telemetry_period_ms.max(1)),
+                        Ordering::Relaxed,
+                    );
                     RPM_SERVICE_MODE.store(rpm_service_mode as u8, Ordering::Relaxed);
                     out[0] = Packet::ack(req.seq, MsgType::TelemetrySet, 0);
                     log_info!(
@@ -382,6 +393,9 @@ impl BusMasterTransport {
                 }
                 ExperimentRecord::Event(record) => {
                     Packet::experiment_event(self.master_packet_seq, record)
+                }
+                ExperimentRecord::FeedbackTiming(record) => {
+                    Packet::experiment_feedback_timing(self.master_packet_seq, record)
                 }
             };
             self.master_packet_seq = self.master_packet_seq.wrapping_add(1);
@@ -604,10 +618,13 @@ async fn capture_core1_loop(
 }
 
 const CMD_SEQUENCE: [u8; 10] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04, 0x0D, 0x0C];
+const X_CMD_SEQUENCE: [u8; 4] = [0x03, 0x02, 0x01, 0x00];
+const Z_CMD_SEQUENCE: [u8; 4] = [0x07, 0x06, 0x05, 0x04];
+const XZ_CMD_SEQUENCE: [u8; 8] = [0x03, 0x02, 0x01, 0x00, 0x07, 0x06, 0x05, 0x04];
 const MANUAL_RPM_TRIGGER_ADDR: u8 = 0x88;
 const REMOTE_SPEED_SERVICE_ADDR: u8 = 0xAD;
 const RPM_TRIGGER_LOOP_INTERVAL: u8 = 30;
-const FEEDBACK_SERVICE_INTERVAL: Duration = Duration::from_millis(10);
+const POLLING_SLEEP_GRANULARITY: Duration = Duration::from_millis(1);
 
 #[embassy_executor::task]
 async fn core1_loop(
@@ -622,6 +639,7 @@ async fn core1_loop(
     let mut bus = Bus { pio };
     let mut index = 0;
     let mut rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+    let mut next_idle_feedback_due = Instant::now();
 
     // address data-dir high for output.
     let mut dir_a = Output::new(dir_resources.pin_20, Level::High);
@@ -714,16 +732,29 @@ async fn core1_loop(
             continue;
         }
 
-        Timer::after(FEEDBACK_SERVICE_INTERVAL).await;
-        if !POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed) {
-            poll_feedback_once(
-                &mut bus,
-                &mut commands,
-                &mut index,
-                &mut rpm_trigger_countdown,
-            )
-            .await;
+        let now = Instant::now();
+        if !POSITION_POLLING_ENABLED.load(Ordering::Relaxed)
+            || POSITION_POLLING_SUSPENDED.load(Ordering::Relaxed)
+        {
+            next_idle_feedback_due = now;
+            Timer::after(POLLING_SLEEP_GRANULARITY).await;
+            continue;
         }
+
+        if now < next_idle_feedback_due {
+            Timer::after(POLLING_SLEEP_GRANULARITY).await;
+            continue;
+        }
+
+        let poll_started = Instant::now();
+        poll_feedback_once(
+            &mut bus,
+            &mut commands,
+            &mut index,
+            &mut rpm_trigger_countdown,
+        )
+        .await;
+        next_idle_feedback_due = poll_started + current_position_polling_period();
     }
 }
 
@@ -748,7 +779,7 @@ async fn wait_cycle_start(
         {
             return false;
         }
-        Timer::after(FEEDBACK_SERVICE_INTERVAL).await;
+        Timer::after(current_position_polling_period()).await;
     }
 }
 
@@ -774,7 +805,7 @@ async fn wait_command_complete(
             return false;
         }
 
-        Timer::after(FEEDBACK_SERVICE_INTERVAL).await;
+        Timer::after(current_position_polling_period()).await;
     }
 }
 
@@ -805,7 +836,33 @@ async fn run_experiment(
         ok = false;
     }
 
-    if ok {
+    if ok && request.feedback_only() {
+        enqueue_experiment_record(
+            experiment_records,
+            ExperimentRecord::Event(ExperimentEventRecord {
+                trial_id: request.trial_id,
+                timestamp_us: Instant::now().as_micros(),
+                event: ExperimentEventKind::CommandLoaded,
+                status: 0,
+                flags: current_controller_flags(),
+            }),
+        );
+
+        ok = run_feedback_only_experiment(bus, experiment_records, rpm_trigger_countdown, request)
+            .await;
+        if ok {
+            enqueue_experiment_record(
+                experiment_records,
+                ExperimentRecord::Event(ExperimentEventRecord {
+                    trial_id: request.trial_id,
+                    timestamp_us: Instant::now().as_micros(),
+                    event: ExperimentEventKind::CommandComplete,
+                    status: 0,
+                    flags: current_controller_flags(),
+                }),
+            );
+        }
+    } else if ok {
         bus.write_command_block(request.command.block).await;
         enqueue_experiment_record(
             experiment_records,
@@ -855,6 +912,49 @@ async fn run_experiment(
     ok
 }
 
+async fn run_feedback_only_experiment(
+    bus: &mut Bus<'_>,
+    experiment_records: &mut Producer<'static, ExperimentRecord>,
+    rpm_trigger_countdown: &mut u8,
+    request: ExperimentRunRequest,
+) -> bool {
+    let feedback_period = Duration::from_millis(u64::from(request.feedback_period_ms.max(1)));
+    let poll_count = if request.x_counts <= 0 {
+        1
+    } else {
+        request.x_counts as u32
+    };
+    let mut next_feedback_due = Instant::now();
+    let mut decoder = FeedbackDecoder::new();
+    let mut feedback_index = 0_u64;
+    let mut poll_index = 0_u32;
+
+    while poll_index < poll_count {
+        let now = Instant::now();
+        if now < next_feedback_due {
+            Timer::after(POLLING_SLEEP_GRANULARITY).await;
+            continue;
+        }
+
+        let poll_started = Instant::now();
+        poll_experiment_feedback_once(
+            bus,
+            experiment_records,
+            &mut decoder,
+            &mut feedback_index,
+            rpm_trigger_countdown,
+            request.trial_id,
+            request.flags,
+            poll_index,
+        )
+        .await;
+        poll_index = poll_index.wrapping_add(1);
+        next_feedback_due = poll_started + feedback_period;
+    }
+
+    true
+}
+
 async fn run_experiment_busy_loop(
     bus: &mut Bus<'_>,
     experiment_records: &mut Producer<'static, ExperimentRecord>,
@@ -869,6 +969,7 @@ async fn run_experiment_busy_loop(
     let mut script_index = 0_usize;
     let mut decoder = FeedbackDecoder::new();
     let mut feedback_index = 0_u64;
+    let mut poll_index = 0_u32;
     let mut observed_busy = false;
 
     loop {
@@ -907,6 +1008,8 @@ async fn run_experiment_busy_loop(
                 request.trial_id,
                 script_index as u8,
                 op,
+                request.flags,
+                &mut poll_index,
             )
             .await;
             script_index += 1;
@@ -922,6 +1025,7 @@ async fn run_experiment_busy_loop(
         }
 
         if now >= next_feedback_due {
+            let poll_started = Instant::now();
             poll_experiment_feedback_once(
                 bus,
                 experiment_records,
@@ -929,8 +1033,11 @@ async fn run_experiment_busy_loop(
                 &mut feedback_index,
                 rpm_trigger_countdown,
                 request.trial_id,
+                request.flags,
+                poll_index,
             )
             .await;
+            poll_index = poll_index.wrapping_add(1);
 
             let status = bus.read_status().await;
             if status & PROC_BUSY_MASK != 0 {
@@ -938,7 +1045,7 @@ async fn run_experiment_busy_loop(
             } else if observed_busy {
                 return true;
             }
-            next_feedback_due = Instant::now() + feedback_period;
+            next_feedback_due = poll_started + feedback_period;
         }
 
         Timer::after(Duration::from_millis(1)).await;
@@ -954,6 +1061,8 @@ async fn execute_experiment_bus_op(
     trial_id: u32,
     op_index: u8,
     op: ExperimentBusOp,
+    request_flags: u8,
+    poll_index: &mut u32,
 ) {
     let mut status = EXPERIMENT_BUS_OP_STATUS_OK;
     let mut read_value = 0_u8;
@@ -987,8 +1096,11 @@ async fn execute_experiment_bus_op(
                 feedback_index,
                 rpm_trigger_countdown,
                 trial_id,
+                request_flags,
+                *poll_index,
             )
             .await;
+            *poll_index = (*poll_index).wrapping_add(1);
         }
     }
 
@@ -1014,16 +1126,48 @@ async fn poll_experiment_feedback_once(
     feedback_index: &mut u64,
     rpm_trigger_countdown: &mut u8,
     trial_id: u32,
+    request_flags: u8,
+    poll_index: u32,
 ) {
     let mut latest_sample = None;
 
-    for cmd in CMD_SEQUENCE {
+    for (cmd_index, cmd) in selected_feedback_commands(request_flags)
+        .iter()
+        .copied()
+        .enumerate()
+    {
         Timer::after(Duration::from_nanos(50)).await;
-        let value = bus.command_cycle(cmd).await;
+        let timing = if request_flags & EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING != 0 {
+            let timing = bus.command_cycle_timed(cmd).await;
+            enqueue_experiment_record(
+                experiment_records,
+                ExperimentRecord::FeedbackTiming(ExperimentFeedbackTimingRecord {
+                    trial_id,
+                    timestamp_us: Instant::now().as_micros(),
+                    poll_index,
+                    cmd_index: cmd_index as u8,
+                    cmd,
+                    value: timing.value,
+                    flags: current_controller_flags(),
+                    total_us: timing.total_us,
+                    wait_before_us: timing.wait_before_us,
+                    wait_after_us: timing.wait_after_us,
+                    reads_before: timing.reads_before,
+                    reads_after: timing.reads_after,
+                }),
+            );
+            timing
+        } else {
+            let value = bus.command_cycle(cmd).await;
+            bus::CommandCycleTiming {
+                value,
+                ..bus::CommandCycleTiming::default()
+            }
+        };
         if let Ok(snapshot) = decoder.ingest_command(FeedbackCommand::from_master(
             *feedback_index,
             cmd,
-            value,
+            timing.value,
             *rpm_trigger_countdown <= 1,
         )) {
             latest_sample = Some(snapshot);
@@ -1173,6 +1317,24 @@ async fn service_rpm_update_deadline(
 fn current_rpm_service_mode() -> RpmServiceMode {
     RpmServiceMode::from_u8(RPM_SERVICE_MODE.load(Ordering::Relaxed))
         .unwrap_or(RpmServiceMode::Manual)
+}
+
+fn current_position_polling_period() -> Duration {
+    Duration::from_millis(u64::from(
+        POSITION_POLLING_PERIOD_MS.load(Ordering::Relaxed).max(1),
+    ))
+}
+
+fn selected_feedback_commands(flags: u8) -> &'static [u8] {
+    if flags & EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY != 0 {
+        &X_CMD_SEQUENCE
+    } else if flags & EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY != 0 {
+        &Z_CMD_SEQUENCE
+    } else if flags & EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY != 0 {
+        &XZ_CMD_SEQUENCE
+    } else {
+        &CMD_SEQUENCE
+    }
 }
 
 fn current_controller_flags() -> u8 {
