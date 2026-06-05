@@ -569,7 +569,6 @@ async fn core1_loop(
                         .await
                         {
                             bus.clear_command_block().await;
-                            service_rpm_update(&mut bus, &mut rpm_trigger_countdown).await;
                         } else {
                             CONTROLLER_ERROR.store(true, Ordering::Relaxed);
                             log_warn!("CommandBlock busy wait timed out");
@@ -679,8 +678,7 @@ async fn poll_feedback_once_deadline(
         enqueue_feedback_command(commands, index, cmd, value, *rpm_trigger_countdown <= 1);
     }
 
-    poll_rpm_trigger(bus, rpm_trigger_countdown).await;
-    true
+    poll_rpm_trigger_deadline(bus, rpm_trigger_countdown, deadline).await
 }
 
 fn enqueue_feedback_command(
@@ -712,6 +710,19 @@ async fn poll_rpm_trigger(bus: &mut Bus<'_>, rpm_trigger_countdown: &mut u8) {
     }
 }
 
+async fn poll_rpm_trigger_deadline(
+    bus: &mut Bus<'_>,
+    rpm_trigger_countdown: &mut u8,
+    deadline: Instant,
+) -> bool {
+    if *rpm_trigger_countdown <= 1 {
+        service_rpm_update_deadline(bus, rpm_trigger_countdown, deadline).await
+    } else {
+        *rpm_trigger_countdown -= 1;
+        true
+    }
+}
+
 async fn service_rpm_update(bus: &mut Bus<'_>, rpm_trigger_countdown: &mut u8) {
     Timer::after(Duration::from_nanos(50)).await;
     match current_rpm_service_mode() {
@@ -722,6 +733,29 @@ async fn service_rpm_update(bus: &mut Bus<'_>, rpm_trigger_countdown: &mut u8) {
         }
     }
     *rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+}
+
+async fn service_rpm_update_deadline(
+    bus: &mut Bus<'_>,
+    rpm_trigger_countdown: &mut u8,
+    deadline: Instant,
+) -> bool {
+    Timer::after(Duration::from_nanos(50)).await;
+    let serviced = match current_rpm_service_mode() {
+        RpmServiceMode::Manual => {
+            bus.read_write_zero_pair(MANUAL_RPM_TRIGGER_ADDR).await;
+            true
+        }
+        RpmServiceMode::Remote => {
+            bus.write_zero_register_gated_deadline(REMOTE_SPEED_SERVICE_ADDR, deadline)
+                .await
+        }
+    };
+
+    if serviced {
+        *rpm_trigger_countdown = RPM_TRIGGER_LOOP_INTERVAL;
+    }
+    serviced
 }
 
 fn current_rpm_service_mode() -> RpmServiceMode {

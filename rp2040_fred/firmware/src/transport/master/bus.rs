@@ -48,6 +48,15 @@ impl<'a> Bus<'a> {
         self.write_register_gated(addr, 0x00).await;
     }
 
+    pub async fn write_zero_register_gated_deadline(
+        &mut self,
+        addr: u8,
+        deadline: Instant,
+    ) -> bool {
+        self.write_register_gated_deadline(addr, 0x00, deadline)
+            .await
+    }
+
     pub async fn write_command_block(&mut self, block: CommandBlock) {
         let payload = block.to_payload();
         for (offset, data) in payload.iter().enumerate() {
@@ -63,6 +72,23 @@ impl<'a> Bus<'a> {
         self.poll_until(0xF0, WRITE_READY_MASK).await;
         self.read_cycle(addr).await;
         self.write_cycle(addr, data).await;
+    }
+
+    async fn write_register_gated_deadline(
+        &mut self,
+        addr: u8,
+        data: u8,
+        deadline: Instant,
+    ) -> bool {
+        if !self
+            .poll_until_deadline(0xF0, WRITE_READY_MASK, deadline)
+            .await
+        {
+            return false;
+        }
+        self.read_cycle(addr).await;
+        self.write_cycle(addr, data).await;
+        true
     }
 
     pub async fn read_status(&mut self) -> u8 {
