@@ -6,6 +6,7 @@ use std::io::BufReader;
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use fredctl::spindle::{self, SpindleDirection};
+use fredctl::tool;
 use fredctl::transport::{UsbRole, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlock, CommandBlockRequest, ControllerAction, ControllerStatus, MsgType, Packet,
@@ -524,29 +525,11 @@ impl ToolOptions {
     }
 
     fn step_count(self) -> u8 {
-        turret_step_count(self.current_station, self.target_station)
+        tool::turret_step_count(self.current_station, self.target_station)
     }
 
     fn command_requests(self) -> io::Result<Vec<CommandBlockRequest>> {
-        let steps = self.step_count();
-        if steps == 0 {
-            return Ok(Vec::new());
-        }
-
-        Ok(vec![
-            CommandBlockRequest {
-                block: timed_aux_command_block(-832 * i32::from(steps), 400, self.slew)?,
-                flags: 0,
-            },
-            CommandBlockRequest {
-                block: timed_aux_command_block(159 + 68 * i32::from(steps), 300, self.slew)?,
-                flags: 0,
-            },
-            CommandBlockRequest {
-                block: timed_aux_command_block(10, 600, self.slew)?,
-                flags: 0,
-            },
-        ])
+        tool::turret_command_requests(self.current_station, self.target_station, self.slew)
     }
 }
 
@@ -669,31 +652,6 @@ fn rapid_command_block(
     })
 }
 
-fn timed_aux_command_block(aux_counts: i32, timing: u16, slew: u16) -> io::Result<CommandBlock> {
-    Ok(CommandBlock {
-        m1: 1,
-        m2: 0,
-        m3: 0,
-        m4: 0,
-        m5: raw_word(checked_i16("auxiliary count", aux_counts)?),
-        m6: 0,
-        m7: 0,
-        m8: timing,
-        m9: slew,
-        m10: 0,
-    })
-}
-
-fn turret_step_count(current_station: u8, target_station: u8) -> u8 {
-    if current_station == target_station {
-        0
-    } else if current_station < target_station {
-        target_station - current_station
-    } else {
-        8 - (current_station - target_station)
-    }
-}
-
 fn next_arg(args: &mut impl Iterator<Item = String>, option: &str) -> io::Result<String> {
     args.next().ok_or_else(|| {
         io::Error::new(
@@ -754,13 +712,7 @@ fn parse_station(option: &str, value: &str) -> io::Result<u8> {
         )
     })?;
 
-    if !(1..=8).contains(&station) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{option} must be in range 1..=8"),
-        ));
-    }
-
+    tool::validate_station(option, station)?;
     Ok(station)
 }
 
@@ -940,14 +892,12 @@ fn sample_is_fcf0_read(sample: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        raw_word, turret_step_count, MotionOptions, MoveMode, SpindleCommand, SpindleOptions,
-        ToolOptions,
-    };
+    use super::{raw_word, MotionOptions, MoveMode, SpindleCommand, SpindleOptions, ToolOptions};
     use fredctl::spindle::{
         SpindleDirection, SPINDLE_START_FORWARD_SUBCODE, SPINDLE_START_REVERSE_SUBCODE,
         SPINDLE_STOP_SUBCODE,
     };
+    use fredctl::tool::turret_step_count;
 
     fn rapid_options() -> MotionOptions {
         MotionOptions {

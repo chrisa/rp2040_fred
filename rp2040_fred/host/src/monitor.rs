@@ -8,6 +8,7 @@ use rp2040_fred_protocol::bridge_proto::{
 
 use crate::motion::{self, AxisCalibration};
 use crate::spindle::{self, SpindleDirection};
+use crate::tool;
 use crate::transport::{UsbRole, UsbTransport};
 
 const IDLE_READ_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -269,6 +270,27 @@ impl FredMonitorClient {
         };
 
         self.send_command_request(request)?;
+        if wait {
+            self.wait_idle(None)?;
+        }
+        Ok(true)
+    }
+
+    pub fn change_tool(
+        &mut self,
+        current_station: u8,
+        target_station: u8,
+        slew: u16,
+        wait: bool,
+    ) -> io::Result<bool> {
+        let requests = tool::turret_command_requests(current_station, target_station, slew)?;
+        if requests.is_empty() {
+            return Ok(false);
+        }
+
+        for request in requests {
+            self.send_command_request(request)?;
+        }
         if wait {
             self.wait_idle(None)?;
         }

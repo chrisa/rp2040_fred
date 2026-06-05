@@ -10,6 +10,8 @@ built with `pyo3`.
   userspace component.
 - Spindle start/stop command output is supported through the same master USB
   command path.
+- Automatic turret/tool-changer command output is supported through the same
+  queued controller command path.
 - Passive capture is intentionally not exposed in Python.
 - The external import path remains `from fred_client import FredUsbClient`.
 
@@ -71,6 +73,7 @@ client.rapid_move_delta(x_mm=0.1, z_mm=0.0, slew=61, wait=False)
 client.feed_move_delta(x_mm=0.0, z_mm=-0.1, feed=100, slew=61, wait=False)
 client.set_spindle(on=True, rpm=3000.0, forward=False, wait=False)
 client.set_spindle(on=False, wait=False)
+client.change_tool(current_station=1, target_station=2, slew=61, wait=False)
 status = client.controller_status()
 ```
 
@@ -83,6 +86,12 @@ Spindle start uses the captured `do(0,3/4,0,0,0,0,0,0,SSL,0)` command family:
 emits the captured reverse subcode `3`.  RPM is converted to the old host's
 `SSL ~= rpm / 24` field and capped at 127.  For direct probing, pass
 `ssl=<0..127>` to bypass RPM conversion.
+
+Tool changes move/select the physical turret station, matching the host
+`tool usb --current-station ... --target-station ...` command.  Stations are
+validated as `1..=8`.  The method returns `False` when the current and target
+stations match, otherwise it queues the three captured turret auxiliary blocks
+and returns `True`.
 
 ## Unsupported capture API
 

@@ -145,6 +145,20 @@ impl FredUsbClient {
         })
     }
 
+    #[pyo3(signature = (*, current_station, target_station, slew=61, wait=false))]
+    fn change_tool(
+        &mut self,
+        py: Python<'_>,
+        current_station: u8,
+        target_station: u8,
+        slew: u16,
+        wait: bool,
+    ) -> PyResult<bool> {
+        self.with_client(py, move |client| {
+            client.change_tool(current_station, target_station, slew, wait)
+        })
+    }
+
     fn close(&mut self, py: Python<'_>) {
         if let Some(client) = self.inner.take() {
             py.detach(move || client.close());

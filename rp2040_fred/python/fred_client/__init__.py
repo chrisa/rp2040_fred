@@ -134,6 +134,23 @@ class FredUsbClient:
             )
         )
 
+    def change_tool(
+        self,
+        *,
+        current_station: int,
+        target_station: int,
+        slew: int = 61,
+        wait: bool = False,
+    ) -> bool:
+        return bool(
+            self._inner.change_tool(
+                current_station=current_station,
+                target_station=target_station,
+                slew=slew,
+                wait=wait,
+            )
+        )
+
     def read_capture_samples(self, timeout_ms: int = 1) -> list[int]:
         raise NotImplementedError(
             "Passive capture is not exposed in the Rust-backed Python client"
