@@ -5,14 +5,16 @@ use std::time::{Duration, Instant};
 
 use rp2040_fred_protocol::bridge_proto::{
     CommandBlockRequest, ControllerStatus, ExperimentBusOp, ExperimentRecord, ExperimentRunRequest,
-    ExperimentStatus, MsgType, Packet, RpmServiceMode, EXPERIMENT_STATUS_ACTIVE,
-    EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY, EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING,
-    EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY, EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY,
-    EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY,
+    ExperimentStatus, MsgType, Packet, RpmServiceMode, EXPERIMENT_RUN_FLAG_FEEDBACK_ONLY,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_TIMING, EXPERIMENT_RUN_FLAG_FEEDBACK_XZ_ONLY,
+    EXPERIMENT_RUN_FLAG_FEEDBACK_X_ONLY, EXPERIMENT_RUN_FLAG_FEEDBACK_Z_ONLY,
+    EXPERIMENT_STATUS_ACTIVE,
 };
 
+use crate::canned_cycle::{self, CannedCycleCode, CannedCycleParams};
 use crate::motion::{self, AxisCalibration};
 use crate::spindle::{self, SpindleDirection};
+use crate::threading;
 use crate::tool;
 use crate::transport::{UsbRole, UsbTransport};
 
@@ -264,6 +266,64 @@ impl FredMonitorClient {
         };
 
         self.send_command_request(request)?;
+        if wait {
+            self.wait_idle(None)?;
+        }
+        Ok(true)
+    }
+
+    pub fn thread_sync_move_delta_mm(
+        &mut self,
+        z_mm: f32,
+        pitch_mm: f32,
+        slew: u16,
+        wait: bool,
+    ) -> io::Result<bool> {
+        let request = threading::thread_sync_command_request_mm(
+            z_mm,
+            pitch_mm,
+            slew,
+            self.axis_calibration(),
+        )?;
+
+        self.send_command_request(request)?;
+        if wait {
+            self.wait_idle(None)?;
+        }
+        Ok(true)
+    }
+
+    pub fn canned_cycle(
+        &mut self,
+        code: &str,
+        x_mm: Option<f32>,
+        z_mm: Option<f32>,
+        i: Option<f32>,
+        k: Option<f32>,
+        f: Option<f32>,
+        slew: u16,
+        wait: bool,
+    ) -> io::Result<bool> {
+        let code = CannedCycleCode::parse(code)?;
+        let requests = canned_cycle::canned_cycle_command_requests_mm(
+            code,
+            CannedCycleParams {
+                x_mm,
+                z_mm,
+                i,
+                k,
+                f,
+                slew,
+            },
+            self.axis_calibration(),
+        )?;
+        if requests.is_empty() {
+            return Ok(false);
+        }
+
+        for request in requests {
+            self.send_command_request(request)?;
+        }
         if wait {
             self.wait_idle(None)?;
         }

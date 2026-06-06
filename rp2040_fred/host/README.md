@@ -5,7 +5,7 @@ Status
 - Shared bridge packet protocol in `rp2040-fred-protocol`.
 - Firmware-side bridge service with request handling, telemetry event generation, and queued controller work.
 - Host library and CLI for live USB monitor, capture, cycle-start, motion,
-  tool-change, and spindle tests.
+  tool-change, spindle, G33 thread-sync, and canned-cycle tests.
 - `usb` transport is implemented with `rusb` against role-specific vendor bulk interfaces.
 - Python/PyO3 consumes the host library so LinuxCNC can use one master USB connection for feedback, status, and jog commands.
 
@@ -20,6 +20,8 @@ Usage (usb mode)
 - `cargo run --offline -- spindle usb --start forward --rpm 3000 --wait-complete`
 - `cargo run --offline -- spindle usb --stop --wait-complete`
 - `cargo run --offline -- cycle-start usb`
+- `cargo run --offline -- g33 usb --z-mm -15 --pitch-mm 1.5 --slew 61 --wait-complete`
+- `cargo run --offline -- canned-cycle usb --code G80`
 - `cargo run --offline -- capture usb`
 
 Notes
@@ -46,6 +48,12 @@ Notes
   `m2=3` starts reverse, `m2=4` starts forward, and `m2=5` stops.  `--ssl`
   sends the raw old-host speed code; `--rpm` converts approximately as
   `SSL = rpm / 24` and caps at 127.
+- `g33 usb` sends one decoded spindle-synchronized thread pass using opcode
+  `84`.  Full `G84` threading cycle expansion belongs in the caller so previews
+  and pass scheduling can use the same plan that is executed.
+- `canned-cycle usb` currently accepts `G80` as cancel/no-op and validates
+  `G81` through `G83` parameters, but refuses to move until those command-block
+  mappings are decoded.
 - Conversion constants currently default to:
   - `x_counts_per_mm = 100`
   - `z_counts_per_mm = 100`

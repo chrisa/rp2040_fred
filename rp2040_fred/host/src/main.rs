@@ -3,9 +3,12 @@ use std::fs::File;
 use std::io;
 use std::io::BufReader;
 
+use fredctl::canned_cycle::{self, CannedCycleCode, CannedCycleParams};
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
+use fredctl::motion::AxisCalibration;
 use fredctl::spindle::{self, SpindleDirection};
+use fredctl::threading;
 use fredctl::tool;
 use fredctl::transport::{UsbRole, UsbTransport};
 use rp2040_fred_protocol::bridge_proto::{
@@ -31,6 +34,8 @@ fn main() -> io::Result<()> {
         ("cycle-start", "usb") => cycle_start_usb(),
         ("tool", "usb") => tool_usb(ToolOptions::parse(args)?),
         ("spindle", "usb") => spindle_usb(SpindleOptions::parse(args)?),
+        ("g33", "usb") => g33_usb(G33Options::parse(args)?),
+        ("canned-cycle", "usb") => canned_cycle_usb(CannedCycleOptions::parse(args)?),
         ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
@@ -68,6 +73,10 @@ fn print_help() {
     eprintln!("  fredctl tool usb --current-station <1-8> --target-station <1-8> --slew <value> [--wait-complete]");
     eprintln!("  fredctl spindle usb --start <forward|reverse> (--rpm <rpm>|--ssl <0-127>) [--wait-complete]");
     eprintln!("  fredctl spindle usb --stop [--wait-complete]");
+    eprintln!(
+        "  fredctl g33 usb --z-mm <delta> --pitch-mm <pitch> --slew <value> [--wait-complete]"
+    );
+    eprintln!("  fredctl canned-cycle usb --code <G80|G81|G82|G83|G84> [--x-mm <value>] [--z-mm <value>] [--i <value>] [--k <value>] [--f <value>] [--slew <value>] [--wait-complete]");
     eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
@@ -175,6 +184,59 @@ fn spindle_usb(options: SpindleOptions) -> io::Result<()> {
         }
     }
 
+    if options.wait_complete {
+        wait_controller_idle(&mut t, seq)?;
+        println!("controller idle");
+    }
+    Ok(())
+}
+
+fn g33_usb(options: G33Options) -> io::Result<()> {
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Master)?;
+    t.set_timeout(Duration::from_millis(1000));
+
+    let request = threading::thread_sync_command_request_mm(
+        options.z_mm,
+        options.pitch_mm,
+        options.slew,
+        default_axis_calibration(),
+    )?;
+    let seq = send_command_request(&mut t, 1, request)?;
+
+    println!(
+        "sent G33 thread-sync CommandBlock: z_mm={} pitch_mm={} block={:?}",
+        options.z_mm, options.pitch_mm, request.block
+    );
+    if options.wait_complete {
+        wait_controller_idle(&mut t, seq)?;
+        println!("controller idle");
+    }
+    Ok(())
+}
+
+fn canned_cycle_usb(options: CannedCycleOptions) -> io::Result<()> {
+    let mut t = UsbTransport::open(0x2E8A, 0x000A, UsbRole::Master)?;
+    t.set_timeout(Duration::from_millis(1000));
+
+    let requests = canned_cycle::canned_cycle_command_requests_mm(
+        options.code,
+        options.params(),
+        default_axis_calibration(),
+    )?;
+    if requests.is_empty() {
+        println!("{} canned-cycle cancel/no-op", options.code.label());
+        return Ok(());
+    }
+
+    let mut seq = 1;
+    for request in &requests {
+        seq = send_command_request(&mut t, seq, *request)?;
+    }
+    println!(
+        "sent {} canned-cycle CommandBlocks: count={}",
+        options.code.label(),
+        requests.len()
+    );
     if options.wait_complete {
         wait_controller_idle(&mut t, seq)?;
         println!("controller idle");
@@ -631,6 +693,125 @@ impl SpindleOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct G33Options {
+    z_mm: f32,
+    pitch_mm: f32,
+    slew: u16,
+    wait_complete: bool,
+}
+
+impl G33Options {
+    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
+        let mut args = args;
+        let mut z_mm = None;
+        let mut pitch_mm = None;
+        let mut slew = None;
+        let mut wait_complete = false;
+
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--z-mm" => z_mm = Some(parse_f32("--z-mm", &next_arg(&mut args, "--z-mm")?)?),
+                "--pitch-mm" => {
+                    pitch_mm = Some(parse_f32(
+                        "--pitch-mm",
+                        &next_arg(&mut args, "--pitch-mm")?,
+                    )?)
+                }
+                "--slew" => slew = Some(parse_u16("--slew", &next_arg(&mut args, "--slew")?)?),
+                "--wait-complete" => wait_complete = true,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown G33 option: {arg}"),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            z_mm: z_mm.ok_or_else(|| missing_option("--z-mm"))?,
+            pitch_mm: pitch_mm.ok_or_else(|| missing_option("--pitch-mm"))?,
+            slew: slew.ok_or_else(|| missing_option("--slew"))?,
+            wait_complete,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CannedCycleOptions {
+    code: CannedCycleCode,
+    x_mm: Option<f32>,
+    z_mm: Option<f32>,
+    i: Option<f32>,
+    k: Option<f32>,
+    f: Option<f32>,
+    slew: u16,
+    wait_complete: bool,
+}
+
+impl CannedCycleOptions {
+    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
+        let mut args = args;
+        let mut code = None;
+        let mut x_mm = None;
+        let mut z_mm = None;
+        let mut i = None;
+        let mut k = None;
+        let mut f = None;
+        let mut slew = 61;
+        let mut wait_complete = false;
+
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--code" => code = Some(CannedCycleCode::parse(&next_arg(&mut args, "--code")?)?),
+                "--x-mm" => x_mm = Some(parse_f32("--x-mm", &next_arg(&mut args, "--x-mm")?)?),
+                "--z-mm" => z_mm = Some(parse_f32("--z-mm", &next_arg(&mut args, "--z-mm")?)?),
+                "--i" => i = Some(parse_f32("--i", &next_arg(&mut args, "--i")?)?),
+                "--k" => k = Some(parse_f32("--k", &next_arg(&mut args, "--k")?)?),
+                "--f" => f = Some(parse_f32("--f", &next_arg(&mut args, "--f")?)?),
+                "--slew" => slew = parse_u16("--slew", &next_arg(&mut args, "--slew")?)?,
+                "--wait-complete" => wait_complete = true,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown canned-cycle option: {arg}"),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            code: code.ok_or_else(|| missing_option("--code"))?,
+            x_mm,
+            z_mm,
+            i,
+            k,
+            f,
+            slew,
+            wait_complete,
+        })
+    }
+
+    fn params(self) -> CannedCycleParams {
+        CannedCycleParams {
+            x_mm: self.x_mm,
+            z_mm: self.z_mm,
+            i: self.i,
+            k: self.k,
+            f: self.f,
+            slew: self.slew,
+        }
+    }
+}
+
+fn default_axis_calibration() -> AxisCalibration {
+    AxisCalibration {
+        x_counts_per_mm: 100.0,
+        z_counts_per_mm: 100.0,
+    }
+}
+
 fn rapid_command_block(
     x_diameter_counts: i32,
     z_counts: i32,
@@ -892,7 +1073,11 @@ fn sample_is_fcf0_read(sample: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{raw_word, MotionOptions, MoveMode, SpindleCommand, SpindleOptions, ToolOptions};
+    use super::{
+        raw_word, CannedCycleOptions, G33Options, MotionOptions, MoveMode, SpindleCommand,
+        SpindleOptions, ToolOptions,
+    };
+    use fredctl::canned_cycle::CannedCycleCode;
     use fredctl::spindle::{
         SpindleDirection, SPINDLE_START_FORWARD_SUBCODE, SPINDLE_START_REVERSE_SUBCODE,
         SPINDLE_STOP_SUBCODE,
@@ -1095,5 +1280,42 @@ mod tests {
         .expect_err("missing speed source");
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn g33_options_parse_required_fields() {
+        let options = G33Options::parse(
+            [
+                "--z-mm",
+                "-15",
+                "--pitch-mm",
+                "1.5",
+                "--slew",
+                "61",
+                "--wait-complete",
+            ]
+            .into_iter()
+            .map(std::string::ToString::to_string),
+        )
+        .expect("g33 options");
+
+        assert_eq!(options.z_mm, -15.0);
+        assert_eq!(options.pitch_mm, 1.5);
+        assert_eq!(options.slew, 61);
+        assert!(options.wait_complete);
+    }
+
+    #[test]
+    fn canned_cycle_options_parse_g80_with_default_slew() {
+        let options = CannedCycleOptions::parse(
+            ["--code", "G80"]
+                .into_iter()
+                .map(std::string::ToString::to_string),
+        )
+        .expect("canned cycle options");
+
+        assert_eq!(options.code, CannedCycleCode::G80);
+        assert_eq!(options.slew, 61);
+        assert!(!options.wait_complete);
     }
 }
