@@ -315,7 +315,7 @@ impl BusMasterTransport {
 
         let pkt = Packet::telemetry(
             self.master_packet_seq,
-            0,
+            self.current_snapshot.sample_index as u32,
             self.current_snapshot.x.count(),
             self.current_snapshot.z.count(),
             self.current_snapshot.s.rpm(),

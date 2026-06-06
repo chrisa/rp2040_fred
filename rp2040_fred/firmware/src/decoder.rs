@@ -9,6 +9,9 @@ use crate::{
 mod axis;
 mod spindle;
 
+const FEEDBACK_COMMANDS_PER_POSITION_SNAPSHOT: u64 = 10;
+const MAX_POSITION_CHANGE_COUNTS_PER_SNAPSHOT: u64 = 2_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
     pub data: u8,
@@ -79,11 +82,19 @@ impl FeedbackCommand {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AcceptedAxis {
+    snapshot: AxisSnapshot,
+    sample_index: u64,
+}
+
 pub struct FeedbackDecoder {
     pending_cmd: Option<u8>,
     x: AxisState,
     z: AxisState,
     s: SpindleState,
+    last_x: Option<AcceptedAxis>,
+    last_z: Option<AcceptedAxis>,
     last_s: SpindleSnapshot,
 }
 
@@ -100,6 +111,8 @@ impl FeedbackDecoder {
             x: AxisState::default(),
             z: AxisState::default(),
             s: SpindleState::default(),
+            last_x: None,
+            last_z: None,
             last_s: SpindleSnapshot::default(),
         }
     }
@@ -175,18 +188,20 @@ impl FeedbackDecoder {
     }
 
     fn snapshot(&mut self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {
-        let x = match self.x.snapshot() {
+        let raw_x = match self.x.snapshot() {
             Some(x) => x,
             None => {
                 return Err("no x snapshot");
             }
         };
-        let z = match self.z.snapshot() {
+        let raw_z = match self.z.snapshot() {
             Some(z) => z,
             None => {
                 return Err("no z snapshot");
             }
         };
+        let x = filter_axis(&mut self.last_x, raw_x, sample_index);
+        let z = filter_axis(&mut self.last_z, raw_z, sample_index);
         let s = match self.s.snapshot() {
             Some(s) => s,
             None => self.last_s,
@@ -209,4 +224,48 @@ fn is_packed_bcd(byte: u8) -> bool {
 
 fn bcd_pair_value(byte: u8) -> u32 {
     ((byte >> 4) as u32) * 10 + (byte & 0x0F) as u32
+}
+
+fn filter_axis(
+    last: &mut Option<AcceptedAxis>,
+    candidate: AxisSnapshot,
+    sample_index: u64,
+) -> AxisSnapshot {
+    let Some(previous) = *last else {
+        *last = Some(AcceptedAxis {
+            snapshot: candidate,
+            sample_index,
+        });
+        return candidate;
+    };
+
+    if position_change_allowed(previous, candidate, sample_index) {
+        *last = Some(AcceptedAxis {
+            snapshot: candidate,
+            sample_index,
+        });
+        candidate
+    } else {
+        previous.snapshot
+    }
+}
+
+fn position_change_allowed(
+    previous: AcceptedAxis,
+    candidate: AxisSnapshot,
+    sample_index: u64,
+) -> bool {
+    let previous_count = i64::from(previous.snapshot.count());
+    let candidate_count = i64::from(candidate.count());
+    let delta = if candidate_count >= previous_count {
+        (candidate_count - previous_count) as u64
+    } else {
+        (previous_count - candidate_count) as u64
+    };
+
+    let command_delta = sample_index.saturating_sub(previous.sample_index);
+    let snapshots_elapsed = (command_delta / FEEDBACK_COMMANDS_PER_POSITION_SNAPSHOT).max(1);
+    let allowed = MAX_POSITION_CHANGE_COUNTS_PER_SNAPSHOT.saturating_mul(snapshots_elapsed);
+
+    delta <= allowed
 }
