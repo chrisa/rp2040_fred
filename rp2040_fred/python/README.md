@@ -71,6 +71,8 @@ Jog deltas are exposed in machine units:
 ```python
 client.rapid_move_delta(x_mm=0.1, z_mm=0.0, slew=61, wait=False)
 client.feed_move_delta(x_mm=0.0, z_mm=-0.1, feed=100, slew=61, wait=False)
+client.thread_sync_move(z=-15.0, pitch=1.5, slew=61, wait=True)
+client.canned_cycle(code="G80")
 client.set_spindle(on=True, rpm=3000.0, forward=False, wait=False)
 client.set_spindle(on=False, wait=False)
 client.change_tool(current_station=1, target_station=2, slew=61, wait=False)
@@ -80,6 +82,14 @@ status = client.controller_status()
 X deltas use LinuxCNC/display diameter semantics.  The Rust layer converts them
 to the controller's radius-count payload and rounds to an even diameter count.
 Z deltas are direct axis deltas.
+
+`thread_sync_move()` sends one decoded `opcode 84` spindle-synchronized pass,
+equivalent to a `G33` primitive.  Full `G84` threading cycle expansion stays in
+the caller so preview and execution share the same pass plan.
+
+`canned_cycle()` accepts `G80` as a cancel/no-op and validates `G81` through
+`G83` parameters.  It currently refuses to move for `G81` through `G83` until
+their command-block mappings are decoded.
 
 Spindle start uses the captured `do(0,3/4,0,0,0,0,0,0,SSL,0)` command family:
 `forward=True` emits the inferred forward subcode `4`, while `forward=False`

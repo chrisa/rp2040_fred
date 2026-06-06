@@ -118,6 +118,38 @@ impl FredUsbClient {
         })
     }
 
+    #[pyo3(signature = (*, z, pitch, slew=61, wait=false))]
+    fn thread_sync_move(
+        &mut self,
+        py: Python<'_>,
+        z: f32,
+        pitch: f32,
+        slew: u16,
+        wait: bool,
+    ) -> PyResult<bool> {
+        self.with_client(py, move |client| {
+            client.thread_sync_move_delta_mm(z, pitch, slew, wait)
+        })
+    }
+
+    #[pyo3(signature = (*, code, x=None, z=None, i=None, k=None, f=None, slew=61, wait=false))]
+    fn canned_cycle(
+        &mut self,
+        py: Python<'_>,
+        code: &str,
+        x: Option<f32>,
+        z: Option<f32>,
+        i: Option<f32>,
+        k: Option<f32>,
+        f: Option<f32>,
+        slew: u16,
+        wait: bool,
+    ) -> PyResult<bool> {
+        self.with_client(py, move |client| {
+            client.canned_cycle(code, x, z, i, k, f, slew, wait)
+        })
+    }
+
     fn controller_status<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let status = self.with_client(py, FredMonitorClient::controller_status)?;
         status_to_dict(py, status)
@@ -234,7 +266,9 @@ fn parse_rpm_service_mode(value: &str) -> PyResult<RpmServiceMode> {
 fn map_io_error(err: io::Error) -> PyErr {
     let message = err.to_string();
     match err.kind() {
-        io::ErrorKind::InvalidData => FredProtocolError::new_err(message),
+        io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput => {
+            FredProtocolError::new_err(message)
+        }
         _ => FredUsbError::new_err(message),
     }
 }

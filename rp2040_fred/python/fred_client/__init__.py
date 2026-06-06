@@ -109,6 +109,51 @@ class FredUsbClient:
             )
         )
 
+    def thread_sync_move(
+        self,
+        *,
+        z: float,
+        pitch: float,
+        slew: int = 61,
+        wait: bool = False,
+    ) -> bool:
+        return bool(self._inner.thread_sync_move(z=z, pitch=pitch, slew=slew, wait=wait))
+
+    def g33_move(
+        self,
+        *,
+        z: float,
+        pitch: float,
+        slew: int = 61,
+        wait: bool = False,
+    ) -> bool:
+        return self.thread_sync_move(z=z, pitch=pitch, slew=slew, wait=wait)
+
+    def canned_cycle(
+        self,
+        *,
+        code: str,
+        x: Optional[float] = None,
+        z: Optional[float] = None,
+        i: Optional[float] = None,
+        k: Optional[float] = None,
+        f: Optional[float] = None,
+        slew: int = 61,
+        wait: bool = False,
+    ) -> bool:
+        return bool(
+            self._inner.canned_cycle(
+                code=code,
+                x=x,
+                z=z,
+                i=i,
+                k=k,
+                f=f,
+                slew=slew,
+                wait=wait,
+            )
+        )
+
     def controller_status(self) -> Dict[str, object]:
         return dict(self._inner.controller_status())
 
