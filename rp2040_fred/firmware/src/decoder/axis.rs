@@ -60,8 +60,7 @@ impl AxisState {
             self.pairs[idx] = response;
             self.pair_mask |= 1 << idx;
         } else {
-            self.pairs[idx] = 0;
-            self.pair_mask |= 1 << idx;
+            self.pair_mask &= !(1 << idx);
         }
     }
 
