@@ -5,6 +5,7 @@ use std::io::BufReader;
 
 use fredctl::canned_cycle::{self, CannedCycleCode, CannedCycleParams};
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
+use fredctl::gpio_hall::{HallGpioConfig, HallGpioMonitor, HallLineConfig, HallStates};
 use fredctl::homing::{Axis, HomingConfig};
 use fredctl::homing_sim::{self, SimConfig, SimRunReport};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
@@ -39,6 +40,7 @@ fn main() -> io::Result<()> {
         ("g33", "usb") => g33_usb(G33Options::parse(args)?),
         ("canned-cycle", "usb") => canned_cycle_usb(CannedCycleOptions::parse(args)?),
         ("home", "sim") => home_sim(HomeSimOptions::parse(args)?),
+        ("home", "gpio-monitor") => home_gpio_monitor(HomeGpioOptions::parse(args)?),
         ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
@@ -82,6 +84,7 @@ fn print_help() {
     eprintln!("  fredctl canned-cycle usb --code <G80|G81|G82|G83|G84> [--x-mm <value>] [--z-mm <value>] [--i <value>] [--k <value>] [--f <value>] [--slew <value>] [--wait-complete]");
     eprintln!("  fredctl home sim --axis <x|z> --start <mm> [--html <path>] [--csv <path>] [sim fault options]");
     eprintln!("  fredctl home sim --all [--axis <x|z>] [--html <path>] [--csv <path>] [sim fault options]");
+    eprintln!("  fredctl home gpio-monitor --x-coarse <line> --x-home <line> --z-coarse <line> --z-home <line> [--chip <gpiochipN>] [--active-high]");
     eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
@@ -268,6 +271,33 @@ fn home_sim(options: HomeSimOptions) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn home_gpio_monitor(options: HomeGpioOptions) -> io::Result<()> {
+    let monitor = HallGpioMonitor::open(options.config)?;
+    println!("initial {}", format_hall_states(monitor.states()?));
+
+    loop {
+        for event in monitor.drain_events()? {
+            println!(
+                "event time_s={:.6} input={} axis={} sensor={} active={}",
+                event.timestamp.as_secs_f64(),
+                event.input.label(),
+                event.axis.label(),
+                event.sensor.label(),
+                event.active,
+            );
+        }
+
+        thread::sleep(Duration::from_millis(options.poll_ms));
+    }
+}
+
+fn format_hall_states(states: HallStates) -> String {
+    format!(
+        "x_coarse={} x_home={} z_coarse={} z_home={}",
+        states.x.coarse, states.x.home, states.z.coarse, states.z.home
+    )
 }
 
 fn print_home_sim_report(report: &SimRunReport) {
@@ -866,6 +896,83 @@ struct HomeSimOptions {
     sim_config: SimConfig,
 }
 
+#[derive(Clone, Debug)]
+struct HomeGpioOptions {
+    config: HallGpioConfig,
+    poll_ms: u64,
+}
+
+impl HomeGpioOptions {
+    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
+        let mut args = args;
+        let mut chip = "gpiochip0".to_string();
+        let mut x_coarse = None;
+        let mut x_home = None;
+        let mut z_coarse = None;
+        let mut z_home = None;
+        let mut active_low = true;
+        let mut poll_ms = 10;
+
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--chip" => chip = next_arg(&mut args, "--chip")?,
+                "--x-coarse" => {
+                    x_coarse = Some(parse_u32(
+                        "--x-coarse",
+                        &next_arg(&mut args, "--x-coarse")?,
+                    )?)
+                }
+                "--x-home" => {
+                    x_home = Some(parse_u32("--x-home", &next_arg(&mut args, "--x-home")?)?)
+                }
+                "--z-coarse" => {
+                    z_coarse = Some(parse_u32(
+                        "--z-coarse",
+                        &next_arg(&mut args, "--z-coarse")?,
+                    )?)
+                }
+                "--z-home" => {
+                    z_home = Some(parse_u32("--z-home", &next_arg(&mut args, "--z-home")?)?)
+                }
+                "--active-high" => active_low = false,
+                "--active-low" => active_low = true,
+                "--poll-ms" => {
+                    poll_ms = parse_u64("--poll-ms", &next_arg(&mut args, "--poll-ms")?)?
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown home gpio-monitor option: {arg}"),
+                    ));
+                }
+            }
+        }
+
+        Ok(Self {
+            config: HallGpioConfig {
+                chip,
+                x_coarse: HallLineConfig::new(
+                    x_coarse.ok_or_else(|| missing_option("--x-coarse"))?,
+                    active_low,
+                ),
+                x_home: HallLineConfig::new(
+                    x_home.ok_or_else(|| missing_option("--x-home"))?,
+                    active_low,
+                ),
+                z_coarse: HallLineConfig::new(
+                    z_coarse.ok_or_else(|| missing_option("--z-coarse"))?,
+                    active_low,
+                ),
+                z_home: HallLineConfig::new(
+                    z_home.ok_or_else(|| missing_option("--z-home"))?,
+                    active_low,
+                ),
+            },
+            poll_ms,
+        })
+    }
+}
+
 impl HomeSimOptions {
     fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
         let mut args = args;
@@ -1281,8 +1388,8 @@ fn sample_is_fcf0_read(sample: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        raw_word, CannedCycleOptions, G33Options, MotionOptions, MoveMode, SpindleCommand,
-        SpindleOptions, ToolOptions,
+        raw_word, CannedCycleOptions, G33Options, HomeGpioOptions, MotionOptions, MoveMode,
+        SpindleCommand, SpindleOptions, ToolOptions,
     };
     use fredctl::canned_cycle::CannedCycleCode;
     use fredctl::spindle::{
@@ -1524,5 +1631,59 @@ mod tests {
         assert_eq!(options.code, CannedCycleCode::G80);
         assert_eq!(options.slew, 61);
         assert!(!options.wait_complete);
+    }
+
+    #[test]
+    fn home_gpio_options_parse_required_lines_with_active_low_default() {
+        let options = HomeGpioOptions::parse(
+            [
+                "--chip",
+                "gpiochip4",
+                "--x-coarse",
+                "17",
+                "--x-home",
+                "27",
+                "--z-coarse",
+                "22",
+                "--z-home",
+                "23",
+            ]
+            .into_iter()
+            .map(std::string::ToString::to_string),
+        )
+        .expect("gpio options");
+
+        assert_eq!(options.config.chip, "gpiochip4");
+        assert_eq!(options.config.x_coarse.line, 17);
+        assert!(options.config.x_coarse.active_low);
+        assert_eq!(options.config.x_home.line, 27);
+        assert_eq!(options.config.z_coarse.line, 22);
+        assert_eq!(options.config.z_home.line, 23);
+    }
+
+    #[test]
+    fn home_gpio_options_allow_active_high_and_poll_period() {
+        let options = HomeGpioOptions::parse(
+            [
+                "--x-coarse",
+                "5",
+                "--x-home",
+                "6",
+                "--z-coarse",
+                "13",
+                "--z-home",
+                "19",
+                "--active-high",
+                "--poll-ms",
+                "25",
+            ]
+            .into_iter()
+            .map(std::string::ToString::to_string),
+        )
+        .expect("gpio options");
+
+        assert!(!options.config.x_coarse.active_low);
+        assert!(!options.config.x_home.active_low);
+        assert_eq!(options.poll_ms, 25);
     }
 }

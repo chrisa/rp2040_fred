@@ -1,5 +1,6 @@
 pub mod canned_cycle;
 pub mod capture_file;
+pub mod gpio_hall;
 pub mod homing;
 pub mod homing_sim;
 pub mod monitor;

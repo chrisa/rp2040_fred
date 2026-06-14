@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+gpiod = "0.3"
 rp2040-fred-protocol = { path = "../protocol" }
 rusb = "0.9.4"
 
