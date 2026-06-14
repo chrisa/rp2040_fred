@@ -28,7 +28,7 @@ pub(crate) enum MissingBcdSnapshotPolicy {
     DropIncomplete,
 }
 
-const MISSING_BCD_SNAPSHOT_POLICY: MissingBcdSnapshotPolicy = MissingBcdSnapshotPolicy::Current;
+const MISSING_BCD_SNAPSHOT_POLICY: MissingBcdSnapshotPolicy = MissingBcdSnapshotPolicy::DropIncomplete;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
