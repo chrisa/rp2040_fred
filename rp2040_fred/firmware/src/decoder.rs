@@ -6,11 +6,29 @@ use crate::{
     resources::{FRED_PIN, ONE_MHZ_PIN, READ_WRITE_PIN},
 };
 
+#[path = "decoder/axis.rs"]
 mod axis;
+#[path = "decoder/spindle.rs"]
 mod spindle;
 
 const FEEDBACK_COMMANDS_PER_POSITION_SNAPSHOT: u64 = 10;
 const MAX_POSITION_CHANGE_COUNTS_PER_SNAPSHOT: u64 = 2_000;
+
+// Compile-time switch for incomplete BCD snapshots at the 0x0C boundary.
+// Current preserves the existing behavior; HoldPrevious and DropIncomplete are
+// the two explicit strategies for noisy non-BCD reads.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "selected manually while tuning noisy feedback")
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MissingBcdSnapshotPolicy {
+    Current,
+    HoldPrevious,
+    DropIncomplete,
+}
+
+const MISSING_BCD_SNAPSHOT_POLICY: MissingBcdSnapshotPolicy = MissingBcdSnapshotPolicy::Current;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceCycle {
@@ -88,6 +106,12 @@ struct AcceptedAxis {
     sample_index: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AxisResolution {
+    snapshot: AxisSnapshot,
+    accepted: Option<AcceptedAxis>,
+}
+
 pub struct FeedbackDecoder {
     pending_cmd: Option<u8>,
     x: AxisState,
@@ -96,6 +120,7 @@ pub struct FeedbackDecoder {
     last_x: Option<AcceptedAxis>,
     last_z: Option<AcceptedAxis>,
     last_s: SpindleSnapshot,
+    last_s_valid: bool,
 }
 
 impl Default for FeedbackDecoder {
@@ -114,6 +139,7 @@ impl FeedbackDecoder {
             last_x: None,
             last_z: None,
             last_s: SpindleSnapshot::default(),
+            last_s_valid: false,
         }
     }
 
@@ -121,7 +147,7 @@ impl FeedbackDecoder {
         &mut self,
         sample_index: u64,
         sample: u32,
-    ) -> Result<FeedbackSnapshot, &str> {
+    ) -> Result<FeedbackSnapshot, &'static str> {
         if let Some(cycle) = TraceCycle::from_sample(sample) {
             return self.ingest_cycle(sample_index, cycle);
         }
@@ -132,7 +158,7 @@ impl FeedbackDecoder {
         &mut self,
         sample_index: u64,
         cycle: TraceCycle,
-    ) -> Result<FeedbackSnapshot, &str> {
+    ) -> Result<FeedbackSnapshot, &'static str> {
         if cycle.addr == 0x80 && !cycle.read {
             self.pending_cmd = Some(cycle.data);
             return Err("recorded pending_cmd");
@@ -149,7 +175,18 @@ impl FeedbackDecoder {
         }
     }
 
-    pub fn ingest_command(&mut self, command: FeedbackCommand) -> Result<FeedbackSnapshot, &str> {
+    pub fn ingest_command(
+        &mut self,
+        command: FeedbackCommand,
+    ) -> Result<FeedbackSnapshot, &'static str> {
+        self.ingest_command_with_policy(command, MISSING_BCD_SNAPSHOT_POLICY)
+    }
+
+    pub(crate) fn ingest_command_with_policy(
+        &mut self,
+        command: FeedbackCommand,
+        policy: MissingBcdSnapshotPolicy,
+    ) -> Result<FeedbackSnapshot, &'static str> {
         match command.cmd {
             0x03 => {
                 self.x.reset();
@@ -181,38 +218,51 @@ impl FeedbackDecoder {
             return Err("no 0x0C yet");
         }
 
-        match self.snapshot(command.index) {
+        match self.snapshot_with_policy(command.index, policy) {
             Ok(snapshot) => Ok(snapshot),
             Err(error) => Err(error),
         }
     }
 
-    fn snapshot(&mut self, sample_index: u64) -> Result<FeedbackSnapshot, &str> {
-        let raw_x = match self.x.snapshot() {
-            Some(x) => x,
-            None => {
-                return Err("no x snapshot");
-            }
-        };
-        let raw_z = match self.z.snapshot() {
-            Some(z) => z,
-            None => {
-                return Err("no z snapshot");
-            }
-        };
-        let x = filter_axis(&mut self.last_x, raw_x, sample_index);
-        let z = filter_axis(&mut self.last_z, raw_z, sample_index);
-        let s = match self.s.snapshot() {
-            Some(s) => s,
-            None => self.last_s,
-        };
+    fn snapshot_with_policy(
+        &mut self,
+        sample_index: u64,
+        policy: MissingBcdSnapshotPolicy,
+    ) -> Result<FeedbackSnapshot, &'static str> {
+        let x = resolve_axis(
+            self.last_x,
+            self.x.snapshot(),
+            sample_index,
+            policy,
+            "no x snapshot",
+            "no previous x snapshot",
+        )?;
+        let z = resolve_axis(
+            self.last_z,
+            self.z.snapshot(),
+            sample_index,
+            policy,
+            "no z snapshot",
+            "no previous z snapshot",
+        )?;
+        let raw_s = self.s.snapshot();
+        let s = resolve_spindle(self.last_s, self.last_s_valid, raw_s, policy)?;
 
-        self.last_s = s;
+        if let Some(accepted) = x.accepted {
+            self.last_x = Some(accepted);
+        }
+        if let Some(accepted) = z.accepted {
+            self.last_z = Some(accepted);
+        }
+        if let Some(raw_s) = raw_s {
+            self.last_s = raw_s;
+            self.last_s_valid = true;
+        }
 
         Ok(FeedbackSnapshot {
             sample_index,
-            x,
-            z,
+            x: x.snapshot,
+            z: z.snapshot,
             s,
         })
     }
@@ -226,27 +276,75 @@ fn bcd_pair_value(byte: u8) -> u32 {
     ((byte >> 4) as u32) * 10 + (byte & 0x0F) as u32
 }
 
-fn filter_axis(
-    last: &mut Option<AcceptedAxis>,
-    candidate: AxisSnapshot,
+fn resolve_axis(
+    last: Option<AcceptedAxis>,
+    candidate: Option<AxisSnapshot>,
     sample_index: u64,
-) -> AxisSnapshot {
-    let Some(previous) = *last else {
-        *last = Some(AcceptedAxis {
+    policy: MissingBcdSnapshotPolicy,
+    missing_error: &'static str,
+    missing_previous_error: &'static str,
+) -> Result<AxisResolution, &'static str> {
+    let Some(candidate) = candidate else {
+        return match policy {
+            MissingBcdSnapshotPolicy::Current | MissingBcdSnapshotPolicy::DropIncomplete => {
+                Err(missing_error)
+            }
+            MissingBcdSnapshotPolicy::HoldPrevious => {
+                let Some(previous) = last else {
+                    return Err(missing_previous_error);
+                };
+                Ok(AxisResolution {
+                    snapshot: previous.snapshot,
+                    accepted: None,
+                })
+            }
+        };
+    };
+
+    let accepted = AcceptedAxis {
+        snapshot: candidate,
+        sample_index,
+    };
+
+    let Some(previous) = last else {
+        return Ok(AxisResolution {
             snapshot: candidate,
-            sample_index,
+            accepted: Some(accepted),
         });
-        return candidate;
     };
 
     if position_change_allowed(previous, candidate, sample_index) {
-        *last = Some(AcceptedAxis {
+        Ok(AxisResolution {
             snapshot: candidate,
-            sample_index,
-        });
-        candidate
+            accepted: Some(accepted),
+        })
     } else {
-        previous.snapshot
+        Ok(AxisResolution {
+            snapshot: previous.snapshot,
+            accepted: None,
+        })
+    }
+}
+
+fn resolve_spindle(
+    last: SpindleSnapshot,
+    last_valid: bool,
+    candidate: Option<SpindleSnapshot>,
+    policy: MissingBcdSnapshotPolicy,
+) -> Result<SpindleSnapshot, &'static str> {
+    match candidate {
+        Some(candidate) => Ok(candidate),
+        None => match policy {
+            MissingBcdSnapshotPolicy::Current => Ok(last),
+            MissingBcdSnapshotPolicy::HoldPrevious => {
+                if last_valid {
+                    Ok(last)
+                } else {
+                    Err("no previous spindle snapshot")
+                }
+            }
+            MissingBcdSnapshotPolicy::DropIncomplete => Err("no spindle snapshot"),
+        },
     }
 }
 
