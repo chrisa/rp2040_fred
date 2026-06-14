@@ -103,7 +103,7 @@ fn x_diameter_counts_from_mm(delta_mm: f32, counts_per_mm: f32) -> io::Result<i3
     }
 }
 
-fn z_counts_from_mm(delta_mm: f32, counts_per_mm: f32) -> io::Result<i32> {
+pub(crate) fn z_counts_from_mm(delta_mm: f32, counts_per_mm: f32) -> io::Result<i32> {
     rounded_counts("z delta", delta_mm, counts_per_mm)
 }
 

@@ -13,7 +13,7 @@ pub fn thread_sync_command_request_mm(
     slew: u16,
     calibration: AxisCalibration,
 ) -> io::Result<CommandBlockRequest> {
-    let (_, z_counts) = motion::delta_counts_from_mm(0.0, z_mm, calibration)?;
+    let z_counts = motion::z_counts_from_mm(z_mm, calibration.z_counts_per_mm)?;
     thread_sync_command_request_counts(z_counts, pitch_mm, slew)
 }
 
