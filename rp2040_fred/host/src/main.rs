@@ -5,6 +5,8 @@ use std::io::BufReader;
 
 use fredctl::canned_cycle::{self, CannedCycleCode, CannedCycleParams};
 use fredctl::capture_file::{CaptureReader, CaptureWriter};
+use fredctl::homing::{Axis, HomingConfig};
+use fredctl::homing_sim::{self, SimConfig, SimRunReport};
 use fredctl::monitor::{FredMonitorClient, MonitorSnapshot};
 use fredctl::motion::AxisCalibration;
 use fredctl::spindle::{self, SpindleDirection};
@@ -36,6 +38,7 @@ fn main() -> io::Result<()> {
         ("spindle", "usb") => spindle_usb(SpindleOptions::parse(args)?),
         ("g33", "usb") => g33_usb(G33Options::parse(args)?),
         ("canned-cycle", "usb") => canned_cycle_usb(CannedCycleOptions::parse(args)?),
+        ("home", "sim") => home_sim(HomeSimOptions::parse(args)?),
         ("capture", "usb") => capture_usb(CaptureUsbOptions::parse(args)?),
         ("capture", "file") => {
             let path = args.next().ok_or_else(|| {
@@ -77,6 +80,8 @@ fn print_help() {
         "  fredctl g33 usb --z-mm <delta> --pitch-mm <pitch> --slew <value> [--wait-complete]"
     );
     eprintln!("  fredctl canned-cycle usb --code <G80|G81|G82|G83|G84> [--x-mm <value>] [--z-mm <value>] [--i <value>] [--k <value>] [--f <value>] [--slew <value>] [--wait-complete]");
+    eprintln!("  fredctl home sim --axis <x|z> --start <mm> [--html <path>] [--csv <path>] [sim fault options]");
+    eprintln!("  fredctl home sim --all [--axis <x|z>] [--html <path>] [--csv <path>] [sim fault options]");
     eprintln!("  fredctl capture usb [--ignore-fcf0-reads]");
     eprintln!("  fredctl capture file <capture.bin>");
     eprintln!("  fredctl raw file <capture.bin>");
@@ -242,6 +247,52 @@ fn canned_cycle_usb(options: CannedCycleOptions) -> io::Result<()> {
         println!("controller idle");
     }
     Ok(())
+}
+
+fn home_sim(options: HomeSimOptions) -> io::Result<()> {
+    let homing_config = HomingConfig::default();
+    let reports = options.run(homing_config);
+
+    for report in &reports {
+        print_home_sim_report(report);
+    }
+
+    if let Some(path) = &options.html_path {
+        homing_sim::write_html_report(path, &reports)?;
+        println!("wrote HTML homing simulation report: {path}");
+    }
+
+    if let Some(path) = &options.csv_path {
+        homing_sim::write_csv_report(path, &reports)?;
+        println!("wrote CSV homing simulation trace: {path}");
+    }
+
+    Ok(())
+}
+
+fn print_home_sim_report(report: &SimRunReport) {
+    match &report.result {
+        Ok(result) => {
+            println!(
+                "home sim axis={} start={:.3}mm ok time={:.3}s moves={} datum={:.6}mm offset={:+.6}mm final={:.3}mm",
+                report.axis.label(),
+                report.start_position_mm,
+                result.total_time_s(),
+                result.move_count(),
+                result.home_datum_mm,
+                result.coordinate_offset_mm,
+                result.final_position_mm,
+            );
+        }
+        Err(err) => {
+            println!(
+                "home sim axis={} start={:.3}mm fault: {}",
+                report.axis.label(),
+                report.start_position_mm,
+                err
+            );
+        }
+    }
 }
 
 fn send_command_request(
@@ -805,6 +856,144 @@ impl CannedCycleOptions {
     }
 }
 
+#[derive(Clone, Debug)]
+struct HomeSimOptions {
+    axis: Option<Axis>,
+    start_mm: Option<f64>,
+    all: bool,
+    html_path: Option<String>,
+    csv_path: Option<String>,
+    sim_config: SimConfig,
+}
+
+impl HomeSimOptions {
+    fn parse(args: impl Iterator<Item = String>) -> io::Result<Self> {
+        let mut args = args;
+        let mut axis = None;
+        let mut start_mm = None;
+        let mut all = false;
+        let mut html_path = None;
+        let mut csv_path = None;
+        let mut sim_config = SimConfig::default();
+
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--axis" => axis = Some(Axis::parse(&next_arg(&mut args, "--axis")?)?),
+                "--start" => {
+                    start_mm = Some(parse_f64("--start", &next_arg(&mut args, "--start")?)?)
+                }
+                "--all" => all = true,
+                "--html" => html_path = Some(next_arg(&mut args, "--html")?),
+                "--csv" => csv_path = Some(next_arg(&mut args, "--csv")?),
+                "--drop-every" => {
+                    sim_config.telemetry.drop_every = Some(parse_u64(
+                        "--drop-every",
+                        &next_arg(&mut args, "--drop-every")?,
+                    )?)
+                }
+                "--stale-every" => {
+                    sim_config.telemetry.stale_every = Some(parse_u64(
+                        "--stale-every",
+                        &next_arg(&mut args, "--stale-every")?,
+                    )?)
+                }
+                "--telemetry-noise-mm" => {
+                    sim_config.telemetry.noise_mm = parse_f64(
+                        "--telemetry-noise-mm",
+                        &next_arg(&mut args, "--telemetry-noise-mm")?,
+                    )?
+                }
+                "--telemetry-delay-ms" => {
+                    sim_config.telemetry.delay_s = parse_f64(
+                        "--telemetry-delay-ms",
+                        &next_arg(&mut args, "--telemetry-delay-ms")?,
+                    )? / 1000.0
+                }
+                "--telemetry-quantum-mm" => {
+                    sim_config.telemetry.quantize_mm = Some(parse_f64(
+                        "--telemetry-quantum-mm",
+                        &next_arg(&mut args, "--telemetry-quantum-mm")?,
+                    )?)
+                }
+                "--home-edge-jitter-mm" => {
+                    sim_config.home.edge_jitter_mm = parse_f64(
+                        "--home-edge-jitter-mm",
+                        &next_arg(&mut args, "--home-edge-jitter-mm")?,
+                    )?
+                }
+                "--coarse-edge-jitter-mm" => {
+                    sim_config.coarse.edge_jitter_mm = parse_f64(
+                        "--coarse-edge-jitter-mm",
+                        &next_arg(&mut args, "--coarse-edge-jitter-mm")?,
+                    )?
+                }
+                "--missing-coarse" => sim_config.coarse.missing = true,
+                "--missing-home" => sim_config.home.missing = true,
+                "--invert-coarse" => sim_config.coarse.inverted = true,
+                "--invert-home" => sim_config.home.inverted = true,
+                "--stuck-coarse-active" => sim_config.coarse.stuck = Some(true),
+                "--stuck-coarse-inactive" => sim_config.coarse.stuck = Some(false),
+                "--stuck-home-active" => sim_config.home.stuck = Some(true),
+                "--stuck-home-inactive" => sim_config.home.stuck = Some(false),
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown home sim option: {arg}"),
+                    ));
+                }
+            }
+        }
+
+        if !all {
+            if axis.is_none() {
+                return Err(missing_option("--axis"));
+            }
+            if start_mm.is_none() {
+                return Err(missing_option("--start"));
+            }
+        }
+
+        Ok(Self {
+            axis,
+            start_mm,
+            all,
+            html_path,
+            csv_path,
+            sim_config,
+        })
+    }
+
+    fn run(&self, homing_config: HomingConfig) -> Vec<SimRunReport> {
+        if self.all {
+            let axes = match self.axis {
+                Some(axis) => vec![axis],
+                None => vec![Axis::Z, Axis::X],
+            };
+            let mut reports = Vec::new();
+            for axis in axes {
+                for start in homing_sim::default_starts() {
+                    reports.push(homing_sim::run_simulation(
+                        axis,
+                        *start,
+                        homing_config,
+                        self.sim_config,
+                    ));
+                }
+            }
+            reports
+        } else {
+            let axis = self.axis.unwrap_or(Axis::Z);
+            let start = self.start_mm.unwrap_or(50.0);
+            vec![homing_sim::run_simulation(
+                axis,
+                start,
+                homing_config,
+                self.sim_config,
+            )]
+        }
+    }
+}
+
 fn default_axis_calibration() -> AxisCalibration {
     AxisCalibration {
         x_counts_per_mm: 100.0,
@@ -876,8 +1065,26 @@ fn parse_u16(option: &str, value: &str) -> io::Result<u16> {
     })
 }
 
+fn parse_u64(option: &str, value: &str) -> io::Result<u64> {
+    value.parse::<u64>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid {option} value: {value}"),
+        )
+    })
+}
+
 fn parse_f32(option: &str, value: &str) -> io::Result<f32> {
     value.parse::<f32>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid {option} value: {value}"),
+        )
+    })
+}
+
+fn parse_f64(option: &str, value: &str) -> io::Result<f64> {
+    value.parse::<f64>().map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("invalid {option} value: {value}"),

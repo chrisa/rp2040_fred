@@ -5,3 +5,7 @@ venv
 __pycache__
 python/fred_client/*.so
 python/rust_ext/target
+*.csv
+*.html
+*.bin
+*.raw
